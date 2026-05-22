@@ -1,0 +1,132 @@
+{
+  "reserved": {
+    "max98357a_amp": {
+      "notes": "I2S amp for passive speaker. Do not reuse GPIO18, GPIO19, GPIO21, or GPIO16 when amp mute gating is wired.",
+      "pins": [
+        {
+          "board_pin": "VIN",
+          "physical_pin": "2 or 4",
+          "signal": "5V"
+        },
+        {
+          "board_pin": "GND",
+          "physical_pin": "14, 20, 30, 34, or 39",
+          "signal": "GND"
+        },
+        {
+          "board_pin": "BCLK",
+          "physical_pin": 12,
+          "bcm_gpio": 18,
+          "signal": "I2S/PCM clock"
+        },
+        {
+          "board_pin": "LRC",
+          "physical_pin": 35,
+          "bcm_gpio": 19,
+          "signal": "I2S/PCM frame sync"
+        },
+        {
+          "board_pin": "DIN",
+          "physical_pin": 40,
+          "bcm_gpio": 21,
+          "signal": "I2S/PCM data out"
+        },
+        {
+          "board_pin": "SD",
+          "physical_pin": 36,
+          "bcm_gpio": 16,
+          "signal": "Optional amp shutdown/mute gate"
+        }
+      ]
+    },
+    "aitrip_pn532_reader": {
+      "notes": "AITRIP PN532 V3-style NFC reader in SPI mode. Do not reuse SPI0 GPIO8, GPIO9, GPIO10, or GPIO11.",
+      "pins": [
+        {
+          "board_pin": "VCC / 3.3V",
+          "physical_pin": "1 or 17",
+          "signal": "3.3V"
+        },
+        {
+          "board_pin": "GND",
+          "physical_pin": "6, 9, or 25",
+          "signal": "GND"
+        },
+        {
+          "board_pin": "SCK",
+          "physical_pin": 23,
+          "bcm_gpio": 11,
+          "signal": "SPI0 SCLK"
+        },
+        {
+          "board_pin": "MISO",
+          "physical_pin": 21,
+          "bcm_gpio": 9,
+          "signal": "SPI0 MISO"
+        },
+        {
+          "board_pin": "MOSI",
+          "physical_pin": 19,
+          "bcm_gpio": 10,
+          "signal": "SPI0 MOSI"
+        },
+        {
+          "board_pin": "SS / CS",
+          "physical_pin": 24,
+          "bcm_gpio": 8,
+          "signal": "SPI0 CE0"
+        }
+      ]
+    }
+  },
+  "recommended_future_gpio": {
+    "buttons": [
+      {
+        "name": "play_pause",
+        "physical_pin": 11,
+        "bcm_gpio": 17
+      },
+      {
+        "name": "volume_down",
+        "physical_pin": 13,
+        "bcm_gpio": 27
+      },
+      {
+        "name": "volume_up",
+        "physical_pin": 15,
+        "bcm_gpio": 22
+      },
+      {
+        "name": "next_track",
+        "physical_pin": 16,
+        "bcm_gpio": 23
+      }
+    ],
+    "status_led": {
+      "physical_pin": 18,
+      "bcm_gpio": 24
+    }
+  },
+  "avoid_for_now": [
+    {
+      "physical_pin": "3 and 5",
+      "bcm_gpio": "2 and 3",
+      "reason": "Reserve I2C for future displays/sensors/HAT compatibility."
+    },
+    {
+      "physical_pin": "8 and 10",
+      "bcm_gpio": "14 and 15",
+      "reason": "Leave UART free for serial console/debugging."
+    },
+    {
+      "physical_pin": "27 and 28",
+      "bcm_gpio": "0 and 1",
+      "reason": "ID EEPROM pins; avoid for normal project wiring."
+    },
+    {
+      "physical_pin": 38,
+      "bcm_gpio": 20,
+      "reason": "Other PCM/I2S data pin; leave unused while audio is on I2S."
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Record a Message · Magic Character Box</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  </head>
+  <body class="guest-page">
+    <main class="guest-shell">
+      {% if error %}
+        <section class="guest-card">
+          <p class="label">Recording link</p>
+          <h1>This link is not available</h1>
+          <p class="body-copy">{{ error }}</p>
+        </section>
+      {% else %}
+        <section
+          class="guest-card"
+          data-guest-recorder
+          data-upload-url="{{ url_for('save_guest_recording', token=token) }}"
+        >
+          <p class="label">Magic Character Box</p>
+          <h1>Send a message for {{ character.name }}</h1>
+          <p class="body-copy">Your message will be saved directly to the box. Upload a voice memo from your phone, or record here when this page is opened from a secure link.</p>
+
+          <label>
+            <span class="field-label">Message name</span>
+            <input data-guest-title type="text" value="{{ link.label }}" placeholder="grandma-message">
+          </label>
+
+          <div class="guest-actions" data-guest-record-actions hidden>
+            <button class="button" type="button" data-guest-record>Record</button>
+            <button class="button button-secondary" type="button" data-guest-send disabled>Send to the box</button>
+          </div>
+
+          <audio class="guest-preview" data-guest-preview controls hidden></audio>
+
+          <form class="upload-form guest-upload-form" method="post" action="{{ url_for('save_guest_recording', token=token) }}" enctype="multipart/form-data">
+            <input class="visually-hidden" type="file" name="recording" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.webm,.mp4" data-guest-file>
+            <button class="button button-secondary" type="button" data-guest-upload-trigger>Upload voice memo</button>
+          </form>
+
+          <div class="upload-status" data-guest-upload-status role="status" aria-live="polite" hidden>
+            <span class="upload-spinner" aria-hidden="true"></span>
+            <span data-guest-status>Waiting for a recording.</span>
+            <progress class="upload-progress" data-guest-progress max="100" value="0"></progress>
+          </div>
+
+          <p class="muted" data-guest-record-note>Upload an existing iPhone voice memo if recording is not shown.</p>
+          {% if not ffmpeg_available %}
+            <p class="notice notice-warning">The box can save this recording, but ffmpeg is missing so non-MP3 files may need conversion before playback.</p>
+          {% endif %}
+        </section>
+      {% endif %}
+    </main>
+
+    <script src="{{ url_for('static', filename='guest.js') }}"></script>
+  </body>
+</html>

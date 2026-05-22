@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "magic-character-box"
+version = "0.1.0"
+description = "Open-source NFC story and music box for Raspberry Pi"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["raspberry-pi", "nfc", "audio", "maker", "kids", "python"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Education",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Topic :: Education",
+  "Topic :: Multimedia :: Sound/Audio :: Players",
+]
+dependencies = [
+  "Flask>=3.0,<4",
+]
+
+[project.optional-dependencies]
+pi = [
+  "adafruit-blinka",
+  "adafruit-circuitpython-pn532",
+  "gpiozero",
+]
+
+[project.scripts]
+magic-character-box = "magic_box.app:main"
+magic-character-box-admin = "magic_box.admin:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+magic_box = [
+  "static/*",
+  "templates/*",
+]

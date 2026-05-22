@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Magic Character Box Admin</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <div>
+        <p class="label">Device admin</p>
+        <h1>Magic Character Box</h1>
+      </div>
+      <div class="header-actions">
+        <div class="mode-control" data-mode-panel>
+          <span class="visually-hidden">Device mode</span>
+          <button
+            class="mode-option{% if mode_status.mode == 'setup' %} is-active{% endif %}"
+            type="button"
+            data-mode-action="setup"
+            aria-pressed="{{ 'true' if mode_status.mode == 'setup' else 'false' }}"
+            {% if not mode_status.available %}disabled{% endif %}
+          >Setup scan</button>
+          <button
+            class="mode-option{% if mode_status.mode == 'playback' %} is-active{% endif %}"
+            type="button"
+            data-mode-action="playback"
+            aria-pressed="{{ 'true' if mode_status.mode == 'playback' else 'false' }}"
+            {% if not mode_status.available %}disabled{% endif %}
+          >Playback</button>
+        </div>
+        <div class="volume-control" aria-label="Volume controls">
+          <form method="post" action="{{ url_for('change_volume') }}">
+            <input type="hidden" name="action" value="down">
+            <button class="button button-icon" type="submit" aria-label="Volume down">-</button>
+          </form>
+          <span class="volume-value">Volume {{ volume_percent }}%</span>
+          <form method="post" action="{{ url_for('change_volume') }}">
+            <input type="hidden" name="action" value="up">
+            <button class="button button-icon" type="submit" aria-label="Volume up">+</button>
+          </form>
+        </div>
+        <form method="post" action="{{ url_for('stop_audio') }}">
+          <button class="button button-secondary" type="submit">Stop audio</button>
+        </form>
+      </div>
+    </header>
+    <div class="mode-banner" data-mode-message role="status" aria-live="polite">
+      {{ mode_status.message }}
+    </div>
+
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="notices" aria-label="Messages">
+            {% for category, message in messages %}
+              <p class="notice notice-{{ category }}">{{ message }}</p>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+
+      <nav class="local-nav" aria-label="Admin sections">
+        <a href="#characters">Characters</a>
+        <a href="#program">Teach character</a>
+        <a href="#guest-links">Guest links</a>
+        <a href="#bluetooth">Bluetooth</a>
+        <a href="#details">Device details</a>
+      </nav>
+
+      <section id="characters" class="section">
+        <div class="section-heading">
+          <div>
+            <p class="label">Library · {{ characters|length }} character{{ "" if characters|length == 1 else "s" }}</p>
+            <h2>Characters</h2>
+          </div>
+          <p class="section-note">Play a character, add a message, or manage its files.</p>
+        </div>
+
+        <div class="character-list">
+          {% for character in characters %}
+            <article class="character-row" id="character-{{ character.uid }}">
+              <div class="character-main">
+                <h3>{{ character.name }}</h3>
+                <p class="muted">{{ character.playable_files|length }} MP3{{ "" if character.playable_files|length == 1 else "s" }} · {{ character.mode }} · {{ character.folder_label }}</p>
+                {% if character.playable_files %}
+                  <p class="ready-line">Ready</p>
+                {% else %}
+                  <p class="file-summary">Add a first sound to make this character ready.</p>
+                {% endif %}
+                <p class="tag-list">
+                  {% for uid in character.uids %}
+                    <span>{{ uid }}</span>
+                  {% endfor %}
+                </p>
+                {% if character.other_files %}
+                  <p class="file-summary">{{ character.other_files|length }} uploaded file{{ "" if character.other_files|length == 1 else "s" }} need conversion before playback.</p>
+                {% endif %}
+                <details class="character-danger">
+                  <summary>Character settings</summary>
+                  <form method="post" action="{{ url_for('delete_character', uid=character.uid) }}">
+                    <button class="text-danger-button" type="submit">Delete character</button>
+                  </form>
+                  <p class="muted">Removes the NFC mapping only. Audio files stay on the Pi.</p>
+                </details>
+              </div>
+
+              <div class="character-actions">
+                <form class="inline-form" method="post" action="{{ url_for('play_character', uid=character.uid) }}">
+                  <button class="button" type="submit">Play</button>
+                </form>
+
+                <details class="action-details" {% if not character.playable_files and not character.other_files %}open{% endif %}>
+                  <summary>{{ "Add audio" if character.playable_files else "Add first sound" }}</summary>
+                  <div class="action-stack">
+                    <form class="upload-form" method="post" action="{{ url_for('upload_audio', uid=character.uid) }}" enctype="multipart/form-data">
+                      <input class="visually-hidden" type="file" name="audio" accept="audio/*,.mp3" multiple data-upload-input>
+                      <button class="button button-secondary" type="button" data-upload-trigger>Upload</button>
+                      <div class="upload-status" data-upload-status role="status" aria-live="polite" hidden>
+                        <span class="upload-spinner" aria-hidden="true"></span>
+                        <span data-upload-message>Uploading...</span>
+                        <progress class="upload-progress" data-upload-progress max="100" value="0"></progress>
+                      </div>
+                    </form>
+
+                    <div class="record-panel" data-record-panel data-uid="{{ character.uid }}" hidden>
+                      <label>
+                        <span class="field-label">Record in browser</span>
+                        <input type="text" data-record-title placeholder="goodnight-message">
+                      </label>
+                      <button class="button button-secondary" type="button" data-record-button>Record</button>
+                      <p class="muted" data-record-status>Uses this browser's microphone.</p>
+                    </div>
+                  </div>
+                </details>
+              </div>
+
+              {% if character.playable_files %}
+                <details class="file-list">
+                  <summary>Files</summary>
+                  <ul class="audio-file-list">
+                    {% for file in character.playable_files %}
+                      <li>
+                        <span>{{ file.name }}</span>
+                        <form method="post" action="{{ url_for('delete_audio_file', uid=character.uid, filename=file.name) }}">
+                          <button class="button button-danger" type="submit">Delete</button>
+                        </form>
+                      </li>
+                    {% endfor %}
+                  </ul>
+                </details>
+              {% endif %}
+            </article>
+          {% else %}
+            <p class="empty-state">No characters yet. Add the first NFC tag below.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section id="program" class="section section-split">
+        <div>
+          <p class="label">Teach mode</p>
+          <h2>Teach a character</h2>
+          <p class="body-copy">Give a blank tag a name and its first sound. The tag itself stays blank; the box remembers the UID and creates the audio folder.</p>
+          <div class="last-tag-panel" data-last-tag-panel>
+            <p class="label">Last seen tag</p>
+            <div class="last-tag-card{% if not last_tag.available %} is-empty{% endif %}" data-last-tag-card>
+              <div>
+                <strong data-last-tag-uid>{{ last_tag.uid if last_tag.available else "No tag seen yet" }}</strong>
+                <p class="muted" data-last-tag-meta>
+                  {% if last_tag.available %}
+                    {{ last_tag.status_label }} · {{ last_tag.seen_label }} · {{ last_tag.source }}
+                  {% else %}
+                    Place a sticker on the reader or use Scan.
+                  {% endif %}
+                </p>
+              </div>
+              <button
+                class="button button-secondary"
+                type="button"
+                data-use-last-tag
+                {% if not last_tag.can_add %}hidden{% endif %}
+              >Use this tag</button>
+            </div>
+          </div>
+          <ol class="teach-flow" data-teach-flow>
+            <li class="is-active" data-teach-step="scan">
+              <span>1</span>
+              <strong>Scan a new character</strong>
+            </li>
+            <li data-teach-step="name">
+              <span>2</span>
+              <strong>Name it</strong>
+            </li>
+            <li data-teach-step="sound">
+              <span>3</span>
+              <strong>Add its first sound</strong>
+            </li>
+          </ol>
+        </div>
+
+        <form class="program-form" method="post" action="{{ url_for('save_character') }}">
+          <label>
+            <span class="field-label">Scan a new character</span>
+            <div class="scan-line">
+              <input id="uid-input" name="uid" placeholder="04-A1-22-9B or DINOSAUR" required>
+              <button class="button button-secondary" type="button" id="scan-button" {% if nfc_error %}disabled{% endif %}>Scan</button>
+            </div>
+          </label>
+          <label>
+            <span class="field-label">Name it</span>
+            <input name="name" placeholder="Grandma Token" required>
+          </label>
+          <label>
+            <span class="field-label">Play mode</span>
+            <select name="mode">
+              {% for mode in modes %}
+                <option value="{{ mode }}">{{ mode }}</option>
+              {% endfor %}
+          </select>
+          </label>
+          <button class="button" type="submit">Create character</button>
+          <p class="muted">Audio folder is created automatically from the name.</p>
+          <p class="muted" id="scan-status">
+            {% if nfc_error %}
+              Browser scan is unavailable here. Enter the UID manually.
+            {% elif mode_status.available and mode_status.playback_active %}
+              Playback mode is active. Use Setup scan at the top before scanning a tag.
+            {% else %}
+              Ready to scan from the browser.
+            {% endif %}
+          </p>
+        </form>
+      </section>
+
+      <section id="guest-links" class="section section-split">
+        <div>
+          <p class="label">Family messages</p>
+          <h2>Guest recording links</h2>
+          <p class="body-copy">Create a private upload-only page for a family member. They can record or upload one message from their browser, and it saves straight into the selected character.</p>
+          <ol class="steps">
+            <li>Create a link for the right character.</li>
+            <li>Leave the external URL blank for someone on your Wi-Fi.</li>
+            <li>Paste a guest-only HTTPS tunnel URL for remote family.</li>
+            <li>Send only the guest link, not the admin dashboard.</li>
+          </ol>
+        </div>
+
+        <div class="guest-link-panel">
+          <form class="program-form" method="post" action="{{ url_for('create_guest_recording_link') }}">
+            <label>
+              <span class="field-label">Character</span>
+              <select name="uid" required>
+                {% for character in characters %}
+                  <option value="{{ character.uid }}">{{ character.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              <span class="field-label">Link label</span>
+              <input name="label" placeholder="Grandma birthday message">
+            </label>
+            <label>
+              <span class="field-label">Expires after days</span>
+              <input name="expires_days" type="number" min="1" max="90" value="14">
+            </label>
+            <label>
+              <span class="field-label">Guest access, optional</span>
+              <input
+                name="base_url"
+                value="{{ suggested_guest_base_url }}"
+                placeholder="https://random-words.trycloudflare.com"
+              >
+            </label>
+            <button class="button" type="submit" {% if not characters %}disabled{% endif %}>Create guest link</button>
+            <p class="muted">The dashboard fills this with the best secure address it can see. Use the Tailscale address for your devices, or paste a public guest-only tunnel URL for someone outside your tailnet.</p>
+          </form>
+
+          <div class="guest-link-list">
+            {% for link in guest_links %}
+              <article class="guest-link-row{% if link.expired %} is-expired{% endif %}">
+                <div>
+                  <h3>{{ link.label }}</h3>
+                  <p class="muted">{{ link.character_name }} · {{ link.expires_label }} · {{ link.access_label }}</p>
+                  <input readonly value="{{ link.url }}" aria-label="Guest recording link for {{ link.label }}">
+                  <p class="muted">{{ link.access_hint }}</p>
+                </div>
+                <form method="post" action="{{ url_for('delete_guest_recording_link', token=link.token) }}">
+                  <button class="button button-danger" type="submit">Revoke</button>
+                </form>
+              </article>
+            {% else %}
+              <p class="empty-state">No guest recording links yet.</p>
+            {% endfor %}
+          </div>
+        </div>
+      </section>
+
+      <section id="bluetooth" class="section bluetooth-section" data-bluetooth-panel>
+        <div class="section-heading">
+          <div>
+            <p class="label">Future socket</p>
+            <h2>Bluetooth experiments</h2>
+          </div>
+          <p class="section-note">Optional prototype path for contributors. The finished kid box uses the wired MAX98357A speaker.</p>
+        </div>
+
+        <div class="bluetooth-toolbar">
+          <button class="button button-secondary" type="button" data-bluetooth-refresh>Refresh</button>
+          <button class="button button-secondary" type="button" data-bluetooth-scan {% if not bluetooth_status.available %}disabled{% endif %}>Scan</button>
+          <button class="button button-secondary" type="button" data-bluetooth-power {% if not bluetooth_status.available %}disabled{% endif %}>
+            {{ "Power off" if bluetooth_status.powered else "Power on" }}
+          </button>
+        </div>
+
+        <div class="status-grid bluetooth-status-grid" aria-label="Bluetooth status">
+          <div>
+            <p class="label">Adapter</p>
+            <p class="status-value" data-bluetooth-adapter>{{ "on" if bluetooth_status.powered else "off" if bluetooth_status.available else "unavailable" }}</p>
+            <p class="muted" data-bluetooth-message>{{ bluetooth_status.message }}</p>
+          </div>
+          <div>
+            <p class="label">Default output</p>
+            <p class="status-value" data-bluetooth-output>{{ bluetooth_status.default_sink or "unknown" }}</p>
+            <p class="muted">Playback follows the Pi's default Pulse/PipeWire output.</p>
+          </div>
+          <div>
+            <p class="label">Scan state</p>
+            <p class="status-value" data-bluetooth-scan-state>{{ "scanning" if bluetooth_status.discovering else "idle" }}</p>
+            <p class="muted">Experimental; skip this for the normal build.</p>
+          </div>
+          <div>
+            <p class="label">Devices</p>
+            <p class="status-value" data-bluetooth-count>{{ bluetooth_status.devices|length }}</p>
+            <p class="muted">Audio-capable devices are marked as speakers when BlueZ exposes that info.</p>
+          </div>
+        </div>
+
+        <p class="muted bluetooth-action-status" data-bluetooth-status role="status" aria-live="polite"></p>
+
+        <div class="bluetooth-device-list" data-bluetooth-devices>
+          {% for device in bluetooth_status.devices %}
+            <article class="bluetooth-device" data-device-address="{{ device.address }}">
+              <div>
+                <h3>{{ device.name }}</h3>
+                <p class="muted">{{ device.address }} · {{ "speaker" if device.audio else device.icon or "device" }}</p>
+                <p class="tag-list">
+                  {% if device.connected %}<span>connected</span>{% endif %}
+                  {% if device.paired %}<span>paired</span>{% endif %}
+                  {% if device.trusted %}<span>trusted</span>{% endif %}
+                </p>
+              </div>
+              <div class="bluetooth-device-actions">
+                <button class="button" type="button" data-bluetooth-device-action="use-audio">Use for audio</button>
+                <button class="button button-secondary" type="button" data-bluetooth-device-action="pair">Pair</button>
+                <button class="button button-secondary" type="button" data-bluetooth-device-action="connect">Connect</button>
+                <button class="button button-secondary" type="button" data-bluetooth-device-action="disconnect">Disconnect</button>
+              </div>
+            </article>
+          {% else %}
+            <p class="empty-state">No Bluetooth devices found yet.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section id="details" class="section details-section">
+        <details>
+          <summary>Device details</summary>
+          <div class="status-grid" aria-label="System status">
+            <div>
+              <p class="label">NFC reader</p>
+              <p class="status-value">{{ nfc_backend }}</p>
+              {% if nfc_error %}
+                <p class="muted">{{ nfc_error }}</p>
+              {% else %}
+                <p class="muted">Ready for scan/register workflows.</p>
+              {% endif %}
+            </div>
+            <div>
+              <p class="label">Recording</p>
+              <p class="status-value">{{ "ffmpeg ready" if ffmpeg_available else "ffmpeg missing" }}</p>
+              <p class="muted">Browser recordings are converted to MP3.</p>
+            </div>
+            <div>
+              <p class="label">Playback</p>
+              <p class="status-value">{{ volume_percent }}% volume</p>
+              <p class="muted">{{ "dry run" if dry_run_audio else audio_command }}</p>
+            </div>
+            <div>
+              <p class="label">Software scans</p>
+              <p class="status-value">fake-tag queue</p>
+              <p class="muted">{{ trigger_file }}</p>
+            </div>
+          </div>
+        </details>
+
+        <details>
+          <summary>Box tools</summary>
+          <div class="tool-grid">
+            <button class="button" type="button" data-test-box>Test box</button>
+            <a class="button button-secondary" href="{{ url_for('download_backup') }}">Download backup</a>
+            <form method="post" action="{{ url_for('shutdown_device') }}" data-confirm="Shut down the Raspberry Pi now? Wait for the activity light to settle before unplugging.">
+              <button class="button button-danger" type="submit">Shutdown box</button>
+            </form>
+          </div>
+          <div class="diagnostic-results" data-diagnostic-results hidden></div>
+          <p class="muted">These are parent tools for troubleshooting and maintenance.</p>
+        </details>
+
+        <details>
+          <summary>Recent events</summary>
+          <ul class="event-list" data-event-list>
+            {% for event in recent_events %}
+              <li class="event-{{ event.level }}">
+                <span>{{ event.created_label }}</span>
+                <strong>{{ event.message }}</strong>
+              </li>
+            {% else %}
+              <li class="empty-event">No events yet.</li>
+            {% endfor %}
+          </ul>
+        </details>
+
+        <details>
+          <summary>Dev scan buttons</summary>
+          <div class="dev-scan-list">
+            {% for character in characters %}
+              <form method="post" action="{{ url_for('fake_scan_character', uid=character.uid) }}">
+                <span>{{ character.name }}</span>
+                <button class="button button-secondary" type="submit">Simulate</button>
+              </form>
+            {% endfor %}
+          </div>
+        </details>
+
+        <details>
+          <summary>3D figure notes</summary>
+          <div>
+            <h3>Prompt shape</h3>
+            <p class="muted">"A small friendly rocket mascot toy, simple rounded shapes, flat circular base, no thin parts, designed for FDM 3D printing, single solid object."</p>
+          </div>
+          <div>
+            <h3>NFC base</h3>
+            <p class="muted">Use a 35-45 mm wide base. Add a shallow underside recess for a 25-30 mm NFC sticker, then cover it with felt or tape.</p>
+          </div>
+          <div>
+            <h3>Print check</h3>
+            <p class="muted">Inspect in a slicer before printing. Avoid skinny arms, sharp spikes, fragile antennas, and unsupported overhangs.</p>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <script src="{{ url_for('static', filename='admin.js') }}"></script>
+  </body>
+</html>

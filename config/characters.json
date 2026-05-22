@@ -1,0 +1,17 @@
+{
+  "DAD": {
+    "folder": "audio/dad",
+    "mode": "first",
+    "name": "Dad Token"
+  },
+  "DINOSAUR": {
+    "folder": "audio/dinosaur",
+    "mode": "shuffle",
+    "name": "Dinosaur"
+  },
+  "ROCKET": {
+    "folder": "audio/rocket",
+    "mode": "shuffle",
+    "name": "Rocket"
+  }
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Magic Character Box Dev Fake-Tag Player
+After=multi-user.target sound.target
+Wants=sound.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/magic-character-box
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=MAGIC_BOX_NFC=file
+Environment=MAGIC_BOX_TRIGGER_FILE=/tmp/magic-character-box-tags.txt
+Environment=MAGIC_BOX_LOG_LEVEL=INFO
+Environment=MAGIC_BOX_AMP_SD_GPIO=16
+Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
+Environment=MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse"
+ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.app --config /home/pi/magic-character-box/config/characters.json --nfc file
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

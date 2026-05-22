@@ -1,0 +1,23 @@
+[Unit]
+Description=Magic Character Box Admin UI Dev Mode
+After=multi-user.target network.target sound.target
+Wants=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/magic-character-box
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=MAGIC_BOX_NFC=mock
+Environment=MAGIC_BOX_ADMIN_HOST=0.0.0.0
+Environment=MAGIC_BOX_ADMIN_PORT=8080
+Environment=MAGIC_BOX_TRIGGER_FILE=/tmp/magic-character-box-tags.txt
+Environment=MAGIC_BOX_AMP_SD_GPIO=16
+Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse"
+ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.admin --config /home/pi/magic-character-box/config/characters.json --nfc mock
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

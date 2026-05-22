@@ -1,0 +1,25 @@
+[Unit]
+Description=Magic Character Box Admin UI
+After=multi-user.target network.target sound.target
+Wants=network.target sound.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/magic-character-box
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+Environment=MAGIC_BOX_NFC=pn532
+Environment=MAGIC_BOX_ADMIN_HOST=0.0.0.0
+Environment=MAGIC_BOX_ADMIN_PORT=8080
+Environment=MAGIC_BOX_AMP_SD_GPIO=16
+Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse"
+Environment=MAGIC_BOX_TRUST_PROXY_HEADERS=1
+# Optional: set this after configuring Tailscale Serve or another HTTPS guest base URL.
+# Environment=MAGIC_BOX_PREFERRED_GUEST_BASE_URL=https://your-box.your-tailnet.ts.net
+ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.admin --config /home/pi/magic-character-box/config/characters.json --nfc pn532
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

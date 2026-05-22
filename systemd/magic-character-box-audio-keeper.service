@@ -1,0 +1,16 @@
+[Unit]
+Description=Magic Character Box Silent PipeWire Audio Keeper
+After=user@1000.service
+Wants=user@1000.service
+
+[Service]
+Type=simple
+User=pi
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 40); do [ -S /run/user/1000/pipewire-0 ] && exit 0; sleep 0.25; done; exit 1'
+ExecStart=/bin/sh -c 'exec cat /dev/zero | /usr/bin/pw-cat --playback --raw --rate 48000 --channels 2 --format s16 -'
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
