@@ -12,6 +12,7 @@ from magic_box.bluetooth import BluetoothActionResult, BluetoothDevice, Bluetoot
 from magic_box.control import consume_stop_request
 from magic_box.guest_links import create_guest_link, load_guest_links
 from magic_box.runtime_state import load_state, record_tag, state_file_for_config
+from magic_box.story_stickers import create_story_sticker, load_story_stickers, story_stickers_file_for_config
 from magic_box.system_mode import ModeActionResult, ModeStatus
 
 
@@ -26,6 +27,7 @@ class AdminTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Magic Character Box", response.data)
             self.assertIn(b"Dinosaur", response.data)
+            self.assertIn(b"Photo stories", response.data)
             self.assertIn(b"Teach a character", response.data)
             self.assertIn(b"Last seen tag", response.data)
             self.assertIn(b"Box tools", response.data)
@@ -282,6 +284,266 @@ class AdminTests(unittest.TestCase):
 
             page = client.get("/")
             self.assertIn(b"https://example.trycloudflare.com/guest/", page.data)
+            self.assertIn(b"/guest/", page.data)
+            self.assertIn(b"/qr.svg", page.data)
+
+            qr = client.get(f"/guest/{link.token}/qr.svg")
+            self.assertEqual(qr.status_code, 200)
+            self.assertEqual(qr.mimetype, "image/svg+xml")
+            self.assertIn(b"<svg", qr.data)
+
+    def test_create_photo_story_creates_character_and_guest_link(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            guest_links_path = root / "config" / "guest_links.json"
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.post(
+                "/photo-stories",
+                data={
+                    "uid": "04:a1:22:9b",
+                    "name": "Grandma at Yellowstone, 1974",
+                    "label": "Grandma tells this story",
+                    "expires_days": "7",
+                    "base_url": "https://example.trycloudflare.com",
+                },
+            )
+
+            self.assertEqual(response.status_code, 302)
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["04-A1-22-9B"]["name"], "Grandma at Yellowstone, 1974")
+            self.assertEqual(data["04-A1-22-9B"]["folder"], "audio/grandma-at-yellowstone-1974")
+            self.assertEqual(data["04-A1-22-9B"]["mode"], "first")
+            self.assertEqual(data["04-A1-22-9B"]["kind"], "photo_story")
+            self.assertTrue((root / "audio" / "grandma-at-yellowstone-1974").exists())
+
+            links = load_guest_links(guest_links_path)
+            self.assertEqual(len(links), 1)
+            link = next(iter(links.values()))
+            self.assertEqual(link.uid, "04-A1-22-9B")
+            self.assertEqual(link.label, "Grandma tells this story")
+            self.assertEqual(link.base_url, "https://example.trycloudflare.com")
+
+    def test_create_story_sticker_link_from_admin(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.post(
+                "/story-stickers",
+                data={
+                    "uid": "04:a1:22:9b",
+                    "support_code": "SD-0001",
+                },
+            )
+
+            self.assertEqual(response.status_code, 302)
+            stickers = load_story_stickers(stickers_path)
+            self.assertEqual(len(stickers), 1)
+            sticker = next(iter(stickers.values()))
+            self.assertEqual(sticker.uid, "04-A1-22-9B")
+            self.assertEqual(sticker.support_code, "SD-0001")
+
+            page = client.get("/")
+            self.assertIn(b"Story stickers", page.data)
+            self.assertIn(b"SD-0001", page.data)
+            self.assertIn(b"/story/", page.data)
+            self.assertIn(b"/qr.svg", page.data)
+
+            qr = client.get(f"/story/{sticker.token}/qr.svg")
+            self.assertEqual(qr.status_code, 200)
+            self.assertEqual(qr.mimetype, "image/svg+xml")
+            self.assertIn(b"<svg", qr.data)
+
+    def test_story_sticker_phone_link_claims_story_and_saves_audio(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", uid="04:a1:22:9b", support_code="SD-0001")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            page = client.get("/story/story-token-123")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(b"Record this memory", page.data)
+
+            with patch("magic_box.admin.prepare_playable_mp3", return_value=False):
+                response = client.post(
+                    "/story/story-token-123/recordings",
+                    data={
+                        "story_name": "Grandma at Yellowstone, 1974",
+                        "title": "first story",
+                        "recording": (BytesIO(b"fake mp3 data"), "story.mp3"),
+                    },
+                    content_type="multipart/form-data",
+                    headers={"X-Requested-With": "XMLHttpRequest"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+            self.assertTrue(payload["can_play_on_box"])
+
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            self.assertEqual(data["04-A1-22-9B"]["name"], "Grandma at Yellowstone, 1974")
+            self.assertEqual(data["04-A1-22-9B"]["folder"], "audio/grandma-at-yellowstone-1974")
+            self.assertEqual(data["04-A1-22-9B"]["kind"], "photo_story")
+            self.assertEqual(data["04-A1-22-9B"]["story_token"], "story-token-123")
+            uploaded = list((root / "audio" / "grandma-at-yellowstone-1974").glob("*story.mp3"))
+            self.assertEqual(len(uploaded), 1)
+
+    def test_mobile_story_sticker_api_returns_app_contract(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", support_code="SD-0001")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/api/mobile/story-stickers/story-token-123")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["story_sticker"]["support_code"], "SD-0001")
+            self.assertEqual(payload["story_sticker"]["status"], "unclaimed")
+            self.assertEqual(payload["story_sticker"]["next_action"], "name_and_record")
+            self.assertEqual(payload["story_sticker"]["recordings"], [])
+            self.assertIn("/api/mobile/story-stickers/story-token-123/recordings", payload["links"]["upload"])
+            self.assertIn("/story/story-token-123", payload["links"]["web"])
+
+    def test_mobile_story_sticker_api_includes_recordings(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", uid="04:a1:22:9b")
+            audio_folder = root / "audio" / "grandma-at-yellowstone"
+            audio_folder.mkdir()
+            from magic_box.story_stickers import claim_story_sticker
+
+            claim_story_sticker(
+                stickers_path,
+                "story-token-123",
+                uid="04:a1:22:9b",
+                name="Grandma at Yellowstone",
+                folder="audio/grandma-at-yellowstone",
+            )
+            (audio_folder / "story.mp3").write_bytes(b"fake mp3 data")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/api/mobile/story-stickers/story-token-123")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            recordings = payload["story_sticker"]["recordings"]
+            self.assertEqual(len(recordings), 1)
+            self.assertEqual(recordings[0]["filename"], "story.mp3")
+            self.assertIn("/api/mobile/story-stickers/story-token-123/recordings/story.mp3", recordings[0]["url"])
+
+            audio = client.get(recordings[0]["url"])
+            self.assertEqual(audio.status_code, 200)
+            self.assertEqual(audio.data, b"fake mp3 data")
+            audio.close()
+
+    def test_mobile_story_sticker_upload_returns_json_without_ajax_header(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", uid="04:a1:22:9b")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            with patch("magic_box.admin.prepare_playable_mp3", return_value=False):
+                response = client.post(
+                    "/api/mobile/story-stickers/story-token-123/recordings",
+                    data={
+                        "story_name": "Grandma at Yellowstone",
+                        "recording": (BytesIO(b"fake mp3 data"), "story.mp3"),
+                    },
+                    content_type="multipart/form-data",
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["story"], "Grandma at Yellowstone")
+            self.assertTrue(payload["can_play_on_box"])
+            self.assertEqual(payload["story_sticker"]["playable_count"], 1)
+            self.assertEqual(payload["story_sticker"]["status"], "ready_for_dock")
+
+    def test_story_sticker_links_can_use_public_story_base_url(self) -> None:
+        with _temp_project() as root, _temporary_env("MAGIC_BOX_PUBLIC_STORY_BASE_URL", "https://tap.getstorydock.com"):
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", support_code="SD-0001")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            page = client.get("/")
+            api = client.get("/api/mobile/story-stickers/story-token-123")
+
+            self.assertIn(b"https://tap.getstorydock.com/story/story-token-123", page.data)
+            payload = api.get_json()
+            assert payload is not None
+            self.assertEqual(payload["links"]["web"], "https://tap.getstorydock.com/story/story-token-123")
+            self.assertEqual(
+                payload["links"]["upload"],
+                "https://tap.getstorydock.com/api/mobile/story-stickers/story-token-123/recordings",
+            )
+
+    def test_guest_only_mode_allows_story_sticker_mobile_api(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", support_code="SD-0001")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True, guest_only=True)
+            client = app.test_client()
+
+            dashboard = client.get("/")
+            api = client.get("/api/mobile/story-stickers/story-token-123")
+
+            self.assertEqual(dashboard.status_code, 404)
+            self.assertEqual(api.status_code, 200)
+            payload = api.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+
+    def test_dock_manifest_includes_story_sticker_mapping(self) -> None:
+        with _temp_project() as root:
+            config_path = root / "config" / "characters.json"
+            stickers_path = story_stickers_file_for_config(config_path)
+            create_story_sticker(stickers_path, token="story-token-123", uid="04:a1:22:9b")
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            data["04-A1-22-9B"] = {
+                "name": "Grandma at Yellowstone",
+                "folder": "audio/grandma-at-yellowstone",
+                "mode": "first",
+                "kind": "photo_story",
+                "story_token": "story-token-123",
+            }
+            (root / "audio" / "grandma-at-yellowstone").mkdir()
+            (root / "audio" / "grandma-at-yellowstone" / "story.mp3").write_bytes(b"fake mp3 data")
+            config_path.write_text(json.dumps(data), encoding="utf-8")
+            app = create_app(config_path, nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/api/dock/manifest")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertEqual(payload["schema"], "story-dock-manifest-v1")
+            story = next(item for item in payload["stories"] if item["name"] == "Grandma at Yellowstone")
+            self.assertEqual(story["story_tokens"], ["story-token-123"])
+            self.assertEqual(story["files"][0]["filename"], "story.mp3")
 
     def test_guest_link_external_url_respects_proxy_headers(self) -> None:
         with _temp_project() as root, _temporary_env("MAGIC_BOX_TRUST_PROXY_HEADERS", "1"):

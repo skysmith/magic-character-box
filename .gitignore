@@ -4,11 +4,39 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .DS_Store
+.env
+.env.*
+hosted/.env*.local
+hosted/supabase/.temp/
+!hosted/.env.example
 build/
 *.gcode
 *.3mf
 *.fpp
 *.egg-info/
+
+# Private Story Dock product workspace. Keep this material in the sibling
+# ../story-dock private repo instead of publishing it here.
+hosted/
+site/
+api/
+docs/story-album/
+docs/marketing/
+docs/manufacturing/
+docs/store-pilot/
+src/story_dock_hosted/
+tests/test_hosted*.py
+tests/test_supabase*.py
+tests/test_sticker_manifest.py
+tests/test_vercel_deploy_script.py
+cad/story-dock-concept.scad
+cad/build_story_dock_concept.sh
+vercel.json
+.vercelignore
+.vercel/
+_uv/
+uv.lock
+.python-version
 
 # Keep local audio out of git by default. Commit only files you own and intend
 # to ship with the box.
@@ -26,5 +54,6 @@ audio/**/*.mp4
 config/control.json
 config/device_state.json
 config/guest_links.json
+config/story_stickers.json
 config/volume.json
 *.zip

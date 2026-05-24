@@ -63,12 +63,146 @@
       {% endwith %}
 
       <nav class="local-nav" aria-label="Admin sections">
+        <a href="#story-album">Photo stories</a>
+        <a href="#story-stickers">Story stickers</a>
         <a href="#characters">Characters</a>
         <a href="#program">Teach character</a>
         <a href="#guest-links">Guest links</a>
         <a href="#bluetooth">Bluetooth</a>
         <a href="#details">Device details</a>
       </nav>
+
+      <section id="story-album" class="section section-split">
+        <div>
+          <p class="label">Story album</p>
+          <h2>Photo stories</h2>
+          <p class="body-copy">Pair an NFC sticker with a printed photo, create a phone recording link, and let the box play that story whenever the photo is tapped.</p>
+          <ol class="steps">
+            <li>Scan the sticker before it goes on the photo.</li>
+            <li>Name the photo or memory.</li>
+            <li>Open the recorder link on a phone and save the story.</li>
+            <li>Stick the tag to the back of the photo.</li>
+          </ol>
+        </div>
+
+        <form class="program-form" method="post" action="{{ url_for('create_photo_story') }}">
+          <label>
+            <span class="field-label">Scan sticker</span>
+            <div class="scan-line">
+              <input
+                id="story-uid-input"
+                name="uid"
+                placeholder="04-A1-22-9B"
+                required
+                data-story-uid-input
+              >
+              <button
+                class="button button-secondary"
+                type="button"
+                data-story-scan-button
+                {% if nfc_error %}disabled{% endif %}
+              >Scan</button>
+            </div>
+          </label>
+          <button
+            class="button button-secondary"
+            type="button"
+            data-story-use-last-tag
+            {% if not last_tag.can_add %}hidden{% endif %}
+          >Use last seen tag</button>
+          <label>
+            <span class="field-label">Photo/story name</span>
+            <input
+              id="story-name-input"
+              name="name"
+              placeholder="Grandma at Yellowstone, 1974"
+              required
+              data-story-name-input
+            >
+          </label>
+          <label>
+            <span class="field-label">Recorder link label</span>
+            <input name="label" placeholder="Grandma tells this story">
+          </label>
+          <label>
+            <span class="field-label">Link expires after days</span>
+            <input name="expires_days" type="number" min="1" max="90" value="14">
+          </label>
+          <label>
+            <span class="field-label">Guest access, optional</span>
+            <input
+              name="base_url"
+              value="{{ suggested_guest_base_url }}"
+              placeholder="https://random-words.trycloudflare.com"
+            >
+          </label>
+          <button class="button" type="submit">Create photo story</button>
+          <p class="muted" data-story-scan-status>
+            {% if nfc_error %}
+              Browser scan is unavailable here. Enter the UID manually.
+            {% elif mode_status.available and mode_status.playback_active %}
+              Playback mode is active. Use Setup scan at the top before scanning a tag.
+            {% else %}
+              Ready to scan a sticker.
+            {% endif %}
+          </p>
+        </form>
+      </section>
+
+      <section id="story-stickers" class="section section-split">
+        <div>
+          <p class="label">Story Dock</p>
+          <h2>Story stickers</h2>
+          <p class="body-copy">Create a preassigned URL for a sticker. A phone can open this link by NFC tap later; the dock can play it once the UID is bound and audio is saved.</p>
+          <ol class="steps">
+            <li>Create a Story Sticker link.</li>
+            <li>Encode that URL to an NFC sticker, or use the QR fallback for a free printed card.</li>
+            <li>Bind the sticker UID when the dock scans it.</li>
+            <li>Record from the phone link.</li>
+          </ol>
+        </div>
+
+        <div class="program-form">
+          <form method="post" action="{{ url_for('create_story_sticker_link') }}">
+            <label>
+              <span class="field-label">Bind UID now, optional</span>
+              <input name="uid" placeholder="04-A1-22-9B">
+            </label>
+            <label>
+              <span class="field-label">Support code, optional</span>
+              <input name="support_code" placeholder="SD-0001">
+            </label>
+            <button class="button" type="submit">Create Story Sticker link</button>
+          </form>
+
+          {% if story_stickers %}
+            <div class="story-sticker-list">
+              {% for sticker in story_stickers %}
+                <article class="story-sticker-row">
+                  <div>
+                    <strong>{{ sticker.name or sticker.support_code or "Unclaimed Story Sticker" }}</strong>
+                    <p class="muted">{{ sticker.status_label }}{% if sticker.uid %} · {{ sticker.uid }}{% endif %}</p>
+                    <input class="copy-field" value="{{ sticker.url }}" readonly>
+                    <div class="link-actions">
+                      <a class="button button-secondary" href="{{ sticker.url }}" target="_blank" rel="noreferrer">Open</a>
+                      <a class="button button-secondary" href="{{ sticker.qr_url }}" download>QR SVG</a>
+                    </div>
+                    {% if not sticker.uid %}
+                      <form class="inline-form bind-form" method="post" action="{{ url_for('bind_story_sticker', token=sticker.token) }}">
+                        <input name="uid" placeholder="Bind UID">
+                        <button class="button button-secondary" type="submit">Bind</button>
+                      </form>
+                    {% endif %}
+                  </div>
+                  <p class="file-summary">{{ sticker.playable_count }} clip{{ "" if sticker.playable_count == 1 else "s" }}</p>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="empty-state">No Story Sticker links yet.</p>
+          {% endif %}
+        </div>
+      </section>
 
       <section id="characters" class="section">
         <div class="section-heading">
@@ -116,8 +250,10 @@
                   <summary>{{ "Add audio" if character.playable_files else "Add first sound" }}</summary>
                   <div class="action-stack">
                     <form class="upload-form" method="post" action="{{ url_for('upload_audio', uid=character.uid) }}" enctype="multipart/form-data">
-                      <input class="visually-hidden" type="file" name="audio" accept="audio/*,.mp3" multiple data-upload-input>
-                      <button class="button button-secondary" type="button" data-upload-trigger>Upload</button>
+                      <label class="button button-secondary upload-picker" data-upload-trigger>
+                        <span>Upload</span>
+                        <input class="visually-hidden" type="file" name="audio" accept="audio/*,.mp3" multiple data-upload-input>
+                      </label>
                       <div class="upload-status" data-upload-status role="status" aria-live="polite" hidden>
                         <span class="upload-spinner" aria-hidden="true"></span>
                         <span data-upload-message>Uploading...</span>
@@ -211,7 +347,7 @@
           </label>
           <label>
             <span class="field-label">Name it</span>
-            <input name="name" placeholder="Grandma Token" required>
+            <input id="character-name-input" name="name" placeholder="Grandma Token" required>
           </label>
           <label>
             <span class="field-label">Play mode</span>
@@ -244,7 +380,7 @@
             <li>Create a link for the right character.</li>
             <li>Leave the external URL blank for someone on your Wi-Fi.</li>
             <li>Paste a guest-only HTTPS tunnel URL for remote family.</li>
-            <li>Send only the guest link, not the admin dashboard.</li>
+            <li>Send the guest link or print its QR, not the admin dashboard.</li>
           </ol>
         </div>
 
@@ -285,6 +421,10 @@
                   <h3>{{ link.label }}</h3>
                   <p class="muted">{{ link.character_name }} · {{ link.expires_label }} · {{ link.access_label }}</p>
                   <input readonly value="{{ link.url }}" aria-label="Guest recording link for {{ link.label }}">
+                  <div class="link-actions">
+                    <a class="button button-secondary" href="{{ link.url }}" target="_blank" rel="noreferrer">Open</a>
+                    <a class="button button-secondary" href="{{ link.qr_url }}" download>QR SVG</a>
+                  </div>
                   <p class="muted">{{ link.access_hint }}</p>
                 </div>
                 <form method="post" action="{{ url_for('delete_guest_recording_link', token=link.token) }}">

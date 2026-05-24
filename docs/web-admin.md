@@ -53,6 +53,8 @@ If the Scan button is disabled and the page says "Browser scan is unavailable he
 - Shows browser recording controls only when the page is running from a secure origin, such as localhost or a guest-only HTTPS tunnel.
 - Converts browser recordings to MP3 when `ffmpeg` is installed.
 - Creates tokenized guest recording links for remote family voice messages.
+- Creates preassigned Story Sticker URLs for the Story Dock phone-tap flow.
+- Downloads QR SVG fallbacks for guest links and Story Sticker links.
 - Registers NFC tag UIDs into `config/characters.json` and creates the audio folder automatically from the character name.
 - Shows the last tag seen by either the dashboard or the playback service.
 - Shows a small recent event log in a drawer.
@@ -186,6 +188,69 @@ The dashboard's `Guest links` form has an optional `Guest access` field. The das
 - If you paste a public guest-only tunnel URL, the guest link uses that tunnel instead.
 
 The guest link list labels each link as private Tailscale HTTPS, public/secure, or local Wi-Fi so you know who can use it.
+
+Each guest link row also has a `QR SVG` button. Use it when a printed card is easier than sending a URL. The QR opens the same upload-only guest recorder link; it does not expose the admin dashboard.
+
+## Story Sticker Links
+
+`Story stickers` is the first version of the newer Story Dock software direction.
+
+It creates a stable phone URL:
+
+```text
+/story/<token>
+```
+
+That URL is what a future factory-encoded NFC sticker/card would open on a phone. In the open-source Pi build, you can use it now by:
+
+1. Creating a Story Sticker link in the dashboard.
+2. Optionally binding the real sticker UID immediately.
+3. Opening the generated `/story/<token>` link on a phone, or downloading its `QR SVG` fallback and printing it on a backing card or setup sheet.
+4. Naming the memory and recording or uploading a voice memo.
+5. Tapping the physical sticker/photo on the dock after the UID is bound.
+
+The QR fallback is intentionally a free/open-source bridge. It is useful before you have prewritten NFC URL stickers, or when a phone case/device does not read NFC reliably. Keep QR codes on backing cards, setup sheets, sleeves, or support material; the main Story Sticker face can stay decorative.
+
+The phone URL can save a recording before the UID is known, but the current Pi playback loop still needs the UID-to-folder mapping before the dock can play it. Bind the UID from the dashboard once the reader can scan the sticker.
+
+Story Sticker data is stored in:
+
+```text
+config/story_stickers.json
+```
+
+That file contains private URL tokens and should not be committed.
+
+The local dock sync contract is:
+
+```text
+GET /api/dock/manifest
+```
+
+It returns Story Dock manifest JSON with stories, UIDs, Story Sticker tokens, playback modes, playable file URLs, and unbound sticker records. The current Pi app does not need this endpoint for local playback yet; it exists so the product direction has a clean software seam for a future dock service or supplier firmware.
+
+The local mobile-app contract starts with:
+
+```text
+GET /api/mobile/story-stickers/<token>
+POST /api/mobile/story-stickers/<token>/recordings
+GET /api/mobile/story-stickers/<token>/recordings/<filename>
+```
+
+The first endpoint returns JSON story status, saved recording metadata, and upload links. The second accepts multipart audio and always returns JSON, which is the first practical target for a polished iPhone app or App Clip. The recording endpoint serves saved audio for preview/debug.
+
+For hosted Story Dock staging, set:
+
+```bash
+MAGIC_BOX_PUBLIC_STORY_BASE_URL=https://tap.getstorydock.com
+```
+
+That makes dashboard-generated Story Sticker links and mobile API links point at the hosted or tunneled story base instead of the local dashboard host.
+
+The local Pi stores Story Sticker tokens in `config/story_stickers.json` because
+it is a self-hosted prototype. Hosted Story Dock backend work belongs in the
+private `story-dock` repo and should use hashed, revocable tokens plus private
+audio storage instead of raw sticker tokens or user passwords.
 
 ## Stop Audio
 

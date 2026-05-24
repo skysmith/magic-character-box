@@ -6,6 +6,7 @@ if (guestPanel) {
   const sendButton = guestPanel.querySelector("[data-guest-send]");
   const recordActions = guestPanel.querySelector("[data-guest-record-actions]");
   const recordNote = guestPanel.querySelector("[data-guest-record-note]");
+  const storyNameInput = guestPanel.querySelector("[data-guest-story-name]");
   const titleInput = guestPanel.querySelector("[data-guest-title]");
   const preview = guestPanel.querySelector("[data-guest-preview]");
   const statusWrap = guestPanel.querySelector("[data-guest-upload-status]");
@@ -13,6 +14,10 @@ if (guestPanel) {
   const progress = guestPanel.querySelector("[data-guest-progress]");
   const fileInput = guestPanel.querySelector("[data-guest-file]");
   const uploadTrigger = guestPanel.querySelector("[data-guest-upload-trigger]");
+  const completePanel = guestPanel.querySelector("[data-guest-complete]");
+  const completeDetail = guestPanel.querySelector("[data-guest-complete-detail]");
+  const playableCount = guestPanel.querySelector("[data-guest-playable-count]");
+  const playablePlural = guestPanel.querySelector("[data-guest-playable-plural]");
   let activeRecorder = null;
   let recordedBlob = null;
   let recordedExtension = "webm";
@@ -26,13 +31,13 @@ if (guestPanel) {
       recordActions.hidden = false;
     }
     if (recordNote) {
-      recordNote.textContent = "You can record here or upload an existing voice memo.";
+      recordNote.textContent = "Record here, or upload an existing Voice Memos file.";
     }
   } else {
     recordActions?.remove();
     preview?.remove();
     if (recordNote) {
-      recordNote.textContent = "Use Upload voice memo from this link.";
+      recordNote.textContent = "Choose a voice memo from this phone, then select the audio file here.";
     }
   }
 
@@ -53,7 +58,7 @@ if (guestPanel) {
       return;
     }
     if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-      setStatus("This browser cannot record here. Use Upload voice memo instead.", 0);
+      setStatus("This browser cannot record here. Choose a voice memo, then select the audio file instead.", 0);
       return;
     }
 
@@ -79,7 +84,7 @@ if (guestPanel) {
         sendButton.disabled = false;
         recordButton.disabled = false;
         recordButton.textContent = "Record again";
-        setStatus("Preview it, then send it to the box.", 0);
+        setStatus("Preview it, then send it to Story Dock.", 0);
       });
 
       activeRecorder = recorder;
@@ -121,7 +126,16 @@ if (guestPanel) {
   });
 
   function uploadBlob(blob, filename, title) {
+    const storyName = storyNameInput?.value?.trim() || "";
+    if (storyNameInput && !storyName) {
+      setStatus("Name this story first.", 0);
+      storyNameInput.focus();
+      return;
+    }
     const formData = new FormData();
+    if (storyNameInput) {
+      formData.append("story_name", storyName);
+    }
     formData.append("title", title);
     formData.append("recording", blob, filename);
     setBusy(true);
@@ -140,7 +154,9 @@ if (guestPanel) {
     request.addEventListener("load", () => {
       const payload = parseJson(request.responseText);
       if (request.status >= 200 && request.status < 300) {
-        setStatus(payload?.message || "Saved. Thank you.", 100);
+        const story = payload?.story_sticker || null;
+        setStatus(payload?.message || "Saved to Story Dock.", 100);
+        showComplete(story);
         if (recordButton) {
           recordButton.textContent = "Record another";
         }
@@ -162,6 +178,23 @@ if (guestPanel) {
       }
     });
     request.send(formData);
+  }
+
+  function showComplete(story) {
+    if (completePanel) {
+      completePanel.hidden = false;
+    }
+    if (completeDetail && story) {
+      completeDetail.textContent = story.can_play_on_box
+        ? "Try tapping the photo on the dock."
+        : "Pair this sticker with the dock when you are back near it.";
+    }
+    if (playableCount && story && Number.isInteger(story.playable_count)) {
+      playableCount.textContent = String(story.playable_count);
+      if (playablePlural) {
+        playablePlural.textContent = story.playable_count === 1 ? "" : "s";
+      }
+    }
   }
 
   function setBusy(isBusy) {

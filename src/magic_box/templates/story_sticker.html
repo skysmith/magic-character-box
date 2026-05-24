@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Story Sticker · Story Dock</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  </head>
+  <body class="guest-page story-phone-page">
+    <main class="story-phone-shell">
+      {% if error %}
+        <section class="story-phone-card">
+          <p class="label">Story Sticker</p>
+          <h1>This link is not available</h1>
+          <p class="body-copy">{{ error }}</p>
+        </section>
+      {% else %}
+        <section
+          class="story-phone-card"
+          data-guest-recorder
+          data-upload-url="{{ upload_url }}"
+        >
+          <header class="story-phone-header">
+            <div>
+              <p class="label">Story Dock</p>
+              <h1>{{ "Add another memory" if sticker.claimed else "Record this memory" }}</h1>
+            </div>
+            {% if sticker.support_code %}
+              <span class="story-support-code">{{ sticker.support_code }}</span>
+            {% endif %}
+          </header>
+
+          <p class="story-phone-line">Tap the photo. Hear the person.</p>
+
+          <ol class="story-progress" aria-label="Story setup progress">
+            <li class="{{ 'is-complete' if sticker.name else 'is-active' }}">
+              <span>1</span>
+              <strong>Name</strong>
+            </li>
+            <li class="{{ 'is-complete' if sticker.playable_count else ('is-active' if sticker.name else '') }}">
+              <span>2</span>
+              <strong>Record</strong>
+            </li>
+            <li class="{{ 'is-complete' if sticker.can_play_on_box else '' }}">
+              <span>3</span>
+              <strong>Play</strong>
+            </li>
+          </ol>
+
+          {% if not sticker.can_play_on_box %}
+            <p class="story-note">
+              {% if sticker.uid %}
+                This sticker is paired with the dock. Save a clip and it will be ready to play.
+              {% else %}
+                You can save the memory now. Pair the sticker with the dock later to make the photo playable.
+              {% endif %}
+            </p>
+          {% else %}
+            <p class="story-note story-note-ready">Ready for the dock. You can still add another clip.</p>
+          {% endif %}
+
+          <label>
+            <span class="field-label">Story name</span>
+            <input data-guest-story-name name="story_name" type="text" value="{{ sticker.name }}" placeholder="Grandma at Yellowstone, 1974" required>
+          </label>
+
+          <label>
+            <span class="field-label">Clip name</span>
+            <input data-guest-title name="title" type="text" value="{{ sticker.name or 'first-story' }}" placeholder="first-story">
+          </label>
+
+          <div class="guest-actions" data-guest-record-actions hidden>
+            <button class="button" type="button" data-guest-record>Record here</button>
+            <button class="button button-secondary" type="button" data-guest-send disabled>Send to Story Dock</button>
+          </div>
+
+          <audio class="guest-preview" data-guest-preview controls hidden></audio>
+
+          <form class="upload-form guest-upload-form" method="post" action="{{ upload_url }}" enctype="multipart/form-data">
+            <input class="visually-hidden" type="file" name="recording" accept="audio/*,.mp3,.m4a,.wav,.ogg,.flac,.webm,.mp4" data-guest-file>
+            <button class="button button-secondary" type="button" data-guest-upload-trigger>Select audio file</button>
+          </form>
+
+          <div class="upload-status" data-guest-upload-status role="status" aria-live="polite" hidden>
+            <span class="upload-spinner" aria-hidden="true"></span>
+            <span data-guest-status>Waiting for a recording.</span>
+            <progress class="upload-progress" data-guest-progress max="100" value="0"></progress>
+          </div>
+
+          <div class="story-saved-panel" data-guest-complete hidden>
+            <strong>Saved to Story Dock.</strong>
+            <span data-guest-complete-detail>
+              {% if sticker.can_play_on_box %}
+                Try tapping the photo on the dock.
+              {% else %}
+                Pair this sticker with the dock when you are back near it.
+              {% endif %}
+            </span>
+          </div>
+
+          <footer class="story-phone-footer">
+            <p class="muted" data-guest-record-note>Choose a voice memo from your phone if recording is not shown, then select the audio file here.</p>
+            <p class="muted">
+              <span data-guest-playable-count>{{ sticker.playable_count }}</span>
+              playable clip<span data-guest-playable-plural>{{ "" if sticker.playable_count == 1 else "s" }}</span> saved.
+            </p>
+          </footer>
+          {% if not ffmpeg_available %}
+            <p class="notice notice-warning">The box can save this recording, but ffmpeg is missing so non-MP3 files may need conversion before playback.</p>
+          {% endif %}
+        </section>
+      {% endif %}
+    </main>
+    <script src="{{ url_for('static', filename='guest.js') }}"></script>
+  </body>
+</html>

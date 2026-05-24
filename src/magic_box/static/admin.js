@@ -1,7 +1,12 @@
 const scanButton = document.querySelector("#scan-button");
 const scanStatus = document.querySelector("#scan-status");
 const uidInput = document.querySelector("#uid-input");
-const nameInput = document.querySelector("[name='name']");
+const nameInput = document.querySelector("#character-name-input");
+const storyScanButton = document.querySelector("[data-story-scan-button]");
+const storyScanStatus = document.querySelector("[data-story-scan-status]");
+const storyUidInput = document.querySelector("[data-story-uid-input]");
+const storyNameInput = document.querySelector("[data-story-name-input]");
+const storyUseLastTagButton = document.querySelector("[data-story-use-last-tag]");
 const teachFlow = document.querySelector("[data-teach-flow]");
 const modePanel = document.querySelector("[data-mode-panel]");
 const modeMessage = document.querySelector("[data-mode-message]");
@@ -40,12 +45,15 @@ if (modePanel) {
         if (modeMessage) {
           modeMessage.textContent = payload.message || (response.ok ? "Mode updated." : "Mode switch failed.");
         }
-        if (scanStatus) {
-          scanStatus.textContent =
-            payload.mode === "setup"
-              ? "Setup mode is active. Ready to scan from the browser."
-              : "Playback mode is active. Use Setup scan at the top before scanning a tag.";
-        }
+        const scanMessage =
+          payload.mode === "setup"
+            ? "Setup mode is active. Ready to scan from the browser."
+            : "Playback mode is active. Use Setup scan at the top before scanning a tag.";
+        [scanStatus, storyScanStatus].forEach((status) => {
+          if (status) {
+            status.textContent = scanMessage;
+          }
+        });
       } catch (error) {
         if (modeMessage) {
           modeMessage.textContent = `Mode switch failed: ${error}`;
@@ -87,39 +95,19 @@ if (modePanel) {
 }
 
 if (scanButton && scanStatus && uidInput) {
-  scanButton.addEventListener("click", async () => {
-    const originalLabel = scanButton.textContent;
-    scanButton.disabled = true;
-    scanButton.textContent = "Scanning...";
-    scanStatus.textContent = "Scanning... hold a tag on the reader.";
-    try {
-      const response = await fetch("/api/scan?timeout=20");
-      const payload = await response.json();
-      if (payload.ok) {
-        uidInput.value = payload.uid;
-        scanStatus.textContent = `Found ${payload.uid}.`;
-        updateLastTag(payload.last_tag);
-        setTeachStep("name");
-        nameInput?.focus();
-      } else {
-        scanStatus.textContent = payload.message || "No tag found.";
-        if (payload.mode_status && modePanel) {
-          modePanel.querySelectorAll("[data-mode-action]").forEach((button) => {
-            const isActive = button.dataset.modeAction === payload.mode_status.mode;
-            button.classList.toggle("is-active", isActive);
-            button.setAttribute("aria-pressed", isActive ? "true" : "false");
-          });
-          if (modeMessage) {
-            modeMessage.textContent = payload.mode_status.message || scanStatus.textContent;
-          }
-        }
-      }
-    } catch (error) {
-      scanStatus.textContent = `Scan failed: ${error}`;
-    } finally {
-      scanButton.disabled = false;
-      scanButton.textContent = originalLabel;
-    }
+  scanButton.addEventListener("click", () => {
+    scanTagIntoInput(scanButton, scanStatus, uidInput, () => {
+      setTeachStep("name");
+      nameInput?.focus();
+    });
+  });
+}
+
+if (storyScanButton && storyScanStatus && storyUidInput) {
+  storyScanButton.addEventListener("click", () => {
+    scanTagIntoInput(storyScanButton, storyScanStatus, storyUidInput, () => {
+      storyNameInput?.focus();
+    });
   });
 }
 
@@ -131,6 +119,48 @@ useLastTagButton?.addEventListener("click", () => {
   setTeachStep("name");
   nameInput?.focus();
 });
+
+storyUseLastTagButton?.addEventListener("click", () => {
+  if (!currentLastTagUid || !storyUidInput) {
+    return;
+  }
+  storyUidInput.value = currentLastTagUid;
+  storyNameInput?.focus();
+});
+
+async function scanTagIntoInput(button, status, input, onFound) {
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Scanning...";
+  status.textContent = "Scanning... hold a tag on the reader.";
+  try {
+    const response = await fetch("/api/scan?timeout=20");
+    const payload = await response.json();
+    if (payload.ok) {
+      input.value = payload.uid;
+      status.textContent = `Found ${payload.uid}.`;
+      updateLastTag(payload.last_tag);
+      onFound?.(payload.uid, payload);
+    } else {
+      status.textContent = payload.message || "No tag found.";
+      if (payload.mode_status && modePanel) {
+        modePanel.querySelectorAll("[data-mode-action]").forEach((modeButton) => {
+          const isActive = modeButton.dataset.modeAction === payload.mode_status.mode;
+          modeButton.classList.toggle("is-active", isActive);
+          modeButton.setAttribute("aria-pressed", isActive ? "true" : "false");
+        });
+        if (modeMessage) {
+          modeMessage.textContent = payload.mode_status.message || status.textContent;
+        }
+      }
+    }
+  } catch (error) {
+    status.textContent = `Scan failed: ${error}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }
+}
 
 testBoxButton?.addEventListener("click", async () => {
   const originalLabel = testBoxButton.textContent;
@@ -187,9 +217,11 @@ function updateLastTag(lastTag) {
     lastTagCard.classList.remove("is-known", "is-new");
     lastTagUid.textContent = "No tag seen yet";
     lastTagMeta.textContent = "Place a sticker on the reader or use Scan.";
-    if (useLastTagButton) {
-      useLastTagButton.hidden = true;
-    }
+    [useLastTagButton, storyUseLastTagButton].forEach((button) => {
+      if (button) {
+        button.hidden = true;
+      }
+    });
     return;
   }
 
@@ -199,9 +231,11 @@ function updateLastTag(lastTag) {
   lastTagCard.classList.toggle("is-new", lastTag.known !== true);
   lastTagUid.textContent = currentLastTagUid;
   lastTagMeta.textContent = `${lastTag.status_label || "Tag"} · ${lastTag.seen_label || "just now"} · ${lastTag.source || "reader"}`;
-  if (useLastTagButton) {
-    useLastTagButton.hidden = lastTag.can_add !== true;
-  }
+  [useLastTagButton, storyUseLastTagButton].forEach((button) => {
+    if (button) {
+      button.hidden = lastTag.can_add !== true;
+    }
+  });
 }
 
 function renderEvents(events) {
@@ -273,6 +307,9 @@ document.querySelectorAll(".upload-form").forEach((form) => {
 
   trigger.addEventListener("click", () => {
     if (form.dataset.uploading === "true") {
+      return;
+    }
+    if (trigger.tagName.toLowerCase() === "label") {
       return;
     }
     input.click();

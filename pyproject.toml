@@ -21,6 +21,7 @@ classifiers = [
 ]
 dependencies = [
   "Flask>=3.0,<4",
+  "segno>=1.6,<2",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +34,7 @@ pi = [
 [project.scripts]
 magic-character-box = "magic_box.app:main"
 magic-character-box-admin = "magic_box.admin:main"
+magic-character-box-sync = "magic_box.dock_sync:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -234,6 +234,49 @@ h3 {
   gap: 12px;
 }
 
+.story-sticker-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.story-sticker-row {
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+}
+
+.copy-field {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.link-actions .button {
+  min-height: 34px;
+  padding: 6px 10px;
+}
+
+.bind-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bind-form input {
+  min-width: 0;
+}
+
 .character-row {
   display: grid;
   grid-template-columns: minmax(240px, 1fr) auto;
@@ -743,7 +786,8 @@ summary {
   background: var(--bg-canvas);
 }
 
-.guest-shell {
+.guest-shell,
+.story-phone-shell {
   align-items: center;
   display: grid;
   min-height: 100vh;
@@ -751,7 +795,8 @@ summary {
   width: min(620px, calc(100% - 32px));
 }
 
-.guest-card {
+.guest-card,
+.story-phone-card {
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
@@ -760,9 +805,153 @@ summary {
   padding: clamp(22px, 5vw, 42px);
 }
 
-.guest-card h1 {
+.guest-card h1,
+.story-phone-card h1 {
   font-size: clamp(2rem, 7vw, 3.5rem);
   line-height: 1;
+}
+
+.story-phone-page {
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f7f7f8 62%, #f3f4f6 100%);
+}
+
+.story-phone-shell {
+  align-items: start;
+  min-height: 100svh;
+  padding: clamp(18px, 4vw, 34px) 0;
+  width: min(560px, calc(100% - 28px));
+}
+
+.story-phone-card {
+  border-color: #d7dce2;
+  border-radius: 16px;
+  box-shadow: 0 18px 60px rgb(17 24 39 / 10%);
+  gap: 20px;
+  padding: clamp(22px, 6vw, 38px);
+}
+
+.story-phone-header {
+  align-items: start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+}
+
+.story-phone-header h1 {
+  max-width: 8.5em;
+}
+
+.story-support-code {
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 5px 9px;
+}
+
+.story-phone-line {
+  color: var(--text-secondary);
+  font-size: 1.08rem;
+}
+
+.story-progress {
+  border-bottom: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 0;
+  grid-template-columns: repeat(3, 1fr);
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 10px 0;
+}
+
+.story-progress li {
+  align-items: center;
+  color: var(--text-muted);
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  min-width: 0;
+}
+
+.story-progress span {
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 850;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.story-progress strong {
+  font-size: 0.82rem;
+}
+
+.story-progress .is-active {
+  color: var(--text-primary);
+}
+
+.story-progress .is-active span {
+  border-color: var(--text-primary);
+}
+
+.story-progress .is-complete {
+  color: var(--state-positive);
+}
+
+.story-progress .is-complete span {
+  background: #dcfce7;
+  border-color: #bbf7d0;
+}
+
+.story-note {
+  background: var(--bg-subtle);
+  border-left: 3px solid var(--text-primary);
+  color: var(--text-secondary);
+  padding: 10px 12px;
+}
+
+.story-note-ready {
+  border-left-color: var(--state-positive);
+}
+
+.story-phone-card input {
+  min-height: 48px;
+}
+
+.story-phone-card .button {
+  min-height: 48px;
+}
+
+.story-saved-panel {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius);
+  color: var(--state-positive);
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+}
+
+.story-saved-panel[hidden] {
+  display: none;
+}
+
+.story-saved-panel span {
+  color: #166534;
+}
+
+.story-phone-footer {
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 6px;
+  padding-top: 14px;
 }
 
 .guest-actions {
@@ -886,6 +1075,18 @@ summary {
   }
 
   .guest-actions {
+    display: grid;
+  }
+
+  .story-phone-shell {
+    width: min(100% - 20px, 560px);
+  }
+
+  .story-phone-card {
+    border-radius: 12px;
+  }
+
+  .story-phone-header {
     display: grid;
   }
 }

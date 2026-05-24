@@ -50,7 +50,16 @@ The shortest copy-and-build version is [docs/quick-build.md](docs/quick-build.md
 - Screen-free, physical interaction for kids.
 - Beginner-friendly Raspberry Pi, NFC, Python, and audio practice.
 - Easy to personalize with a Dad Token, Grandma Token, dinosaur facts, bedtime stories, or secret missions.
+- Can also become a Story Dock / Story Album: NFC-tagged printed photos that play family memories and voice notes.
 - Expandable from an ugly desk demo into a kid-usable enclosure and local parent admin page.
+
+## Story Dock Boundary
+
+Story Dock commercial product work lives in the private sibling `story-dock`
+repo. This public repo stays focused on the local Magic Character Box build and
+may keep open-source bridge pieces for local photo-story and guest-recorder
+flows, but not hosted backend secrets, launch plans, supplier docs, or private
+customer/product strategy.
 
 ## Current Behavior
 
@@ -196,6 +205,11 @@ The admin UI can:
 - Record in the browser only when the page is running from a secure origin, such as localhost or a guest-only HTTPS tunnel.
 - Create an upload-only guest recording link for a remote family member.
 - Register an NFC tag UID without editing JSON, creating the audio folder automatically from the character name.
+- Create a photo story in one pass: scan a sticker, name the memory, and generate a phone recorder link.
+- Create Story Sticker URLs for the newer Story Dock flow: preassign a phone-tap link, bind the NFC UID, record from a phone, and expose the story in `/api/dock/manifest`.
+- Download QR SVG fallbacks for Story Sticker links and guest recorder links. This is the free/open-source print option for people who do not have prewritten NFC URL stickers yet.
+- Serve a first mobile API for future native iPhone/App Clip work at `/api/mobile/story-stickers/<token>`.
+- Point Story Sticker links at a hosted/tunneled URL with `MAGIC_BOX_PUBLIC_STORY_BASE_URL` during staging.
 - Switch between setup scanning and kid playback mode from the dashboard.
 - Use the last-seen tag to teach a new character without copying a UID.
 - Run a one-click box test from the hidden tools drawer.

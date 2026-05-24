@@ -16,6 +16,21 @@ For hardware and printable work, also read:
 - `cad/README.md`
 - `stl/README.md`
 
+Story Dock commercial product work now lives in the private sibling repo:
+
+```text
+../story-dock
+```
+
+Use that repo for Story Album product planning, hosted staging, Supabase wiring,
+iPhone tap-to-record loops, manufacturing, supplier outreach, inventory,
+pricing, launch planning, paid social, creator outreach, landing pages,
+waitlists, preorders, and other private commercial strategy.
+
+Keep this public repo focused on the local Magic Character Box build and
+open-source bridge pieces. Do not add hosted backend secrets, launch docs,
+supplier docs, or private product strategy here.
+
 ## Test Command
 
 Run tests with:
@@ -30,6 +45,8 @@ On the Pi, the project normally lives at:
 /home/pi/magic-character-box
 ```
 
+The Pi install may be a deployed runtime copy rather than a git checkout. Before assuming `git pull` or branch state on the Pi, check the directory. For one-off field validation, it is acceptable to copy a focused module or config file over SSH/SCP, compile/import-check it there, restart the relevant service, and then fold the change back into the local repo docs/tests.
+
 Services:
 
 - `magic-character-box`
@@ -40,7 +57,7 @@ There should be one parent dashboard served by `magic-character-box-admin` on lo
 ## Repo Hygiene
 
 - Do not commit private recordings, copyrighted audio, branded character art, real private NFC UID maps, local IP screenshots, or backup zip files.
-- Runtime files are intentionally ignored: `config/device_state.json`, `config/guest_links.json`, `config/volume.json`, and `config/control.json`.
+- Runtime files are intentionally ignored: `config/device_state.json`, `config/guest_links.json`, `config/story_stickers.json`, `config/volume.json`, and `config/control.json`.
 - Keep the admin dashboard documented as local-network-only. Do not suggest exposing the full dashboard publicly.
 - For remote family recordings, use the guest-only recorder flow, not the full admin UI.
 
@@ -83,6 +100,8 @@ Preferred model-placement workflow:
 7. Export a printable STL/3MF and check it in a slicer before printing.
 
 When using downloaded meshes, verify the model's true up axis visually from at least two orthographic views before exporting. Some files use Y-up or have saucer/base parts in a different orientation than expected.
+
+If a downloaded archive is a part-separated print kit and most STL parts have their own local bed coordinates, do not assume they can be concatenated into a full assembled figure. Prefer a clearly recognizable single part as the token, or stop and ask Sky before inventing a manual assembly.
 
 When opening regenerated files in Flash Studio, start a new project or decline restore prompts first. Flash Studio may restore an old unsaved plate and make it look like the regenerated STL is still wrong.
 

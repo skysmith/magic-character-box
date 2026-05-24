@@ -49,7 +49,18 @@ from .guest_links import (
     revoke_guest_link,
 )
 from .nfc import NFCError, NFCReader, StopRequested, create_reader
+from .qr_codes import QRCodeError, make_qr_svg
 from .runtime_state import append_event, load_state, record_tag, state_file_for_config
+from .story_stickers import (
+    StorySticker,
+    StoryStickerError,
+    bind_story_sticker_uid,
+    claim_story_sticker,
+    create_story_sticker,
+    get_story_sticker,
+    load_story_stickers,
+    story_stickers_file_for_config,
+)
 from .system_mode import ServiceModeController
 from .volume import (
     DEFAULT_VOLUME_PERCENT,
@@ -93,12 +104,28 @@ class GuestLinkView:
     character_name: str
     path: str
     url: str
+    qr_url: str
     access_label: str
     access_hint: str
     is_secure: bool
     is_public_hint: bool
     expires_label: str
     expired: bool
+
+
+@dataclass(frozen=True)
+class StoryStickerView:
+    token: str
+    uid: str
+    support_code: str
+    name: str
+    folder_label: str
+    playable_count: int
+    status_label: str
+    path: str
+    url: str
+    qr_url: str
+    can_play_on_box: bool
 
 
 class ReaderState:
@@ -138,6 +165,7 @@ def create_app(
     audio_warmup_file: str | Path | None = None,
     control_file: str | Path | None = None,
     guest_links_file: str | Path | None = None,
+    story_stickers_file: str | Path | None = None,
     state_file: str | Path | None = None,
     guest_only: bool = False,
     bluetooth_controller: BluetoothController | None = None,
@@ -156,6 +184,11 @@ def create_app(
         Path(guest_links_file).expanduser().resolve()
         if guest_links_file
         else guest_links_file_for_config(resolved_config)
+    )
+    resolved_story_stickers = (
+        Path(story_stickers_file).expanduser().resolve()
+        if story_stickers_file
+        else story_stickers_file_for_config(resolved_config)
     )
     resolved_state = Path(state_file).expanduser().resolve() if state_file else state_file_for_config(resolved_config)
     volume = VolumeControl(resolved_volume, default_percent=default_volume)
@@ -191,9 +224,11 @@ def create_app(
         MAGIC_BOX_VOLUME_FILE=resolved_volume,
         MAGIC_BOX_CONTROL_FILE=resolved_control,
         MAGIC_BOX_GUEST_LINKS_FILE=resolved_guest_links,
+        MAGIC_BOX_STORY_STICKERS_FILE=resolved_story_stickers,
         MAGIC_BOX_STATE_FILE=resolved_state,
         MAGIC_BOX_GUEST_ONLY=guest_only,
         MAGIC_BOX_PREFERRED_GUEST_BASE_URL=_clean_url_base(os.getenv("MAGIC_BOX_PREFERRED_GUEST_BASE_URL", "")),
+        MAGIC_BOX_PUBLIC_STORY_BASE_URL=_clean_url_base(os.getenv("MAGIC_BOX_PUBLIC_STORY_BASE_URL", "")),
     )
 
     def note_event(
@@ -243,10 +278,34 @@ def create_app(
             return explicit
         return suggest_guest_base_url()
 
+    def story_sticker_base_url() -> str:
+        public_story_base = app.config.get("MAGIC_BOX_PUBLIC_STORY_BASE_URL", "")
+        if public_story_base:
+            return str(public_story_base)
+        return suggest_guest_base_url()
+
+    def absolute_url(endpoint: str, **values: Any) -> str:
+        path = url_for(endpoint, **values)
+        base_url = story_sticker_base_url()
+        if base_url:
+            return f"{base_url}{path}"
+        return url_for(endpoint, _external=True, **values)
+
     if guest_only:
         @app.before_request
         def restrict_guest_only():
-            if request.endpoint in {"guest_recorder", "save_guest_recording", "static"}:
+            if request.endpoint in {
+                "guest_recorder",
+                "save_guest_recording",
+                "story_sticker_page",
+                "save_story_sticker_recording",
+                "story_sticker_qr",
+                "mobile_story_sticker",
+                "save_mobile_story_sticker_recording",
+                "mobile_story_recording_audio",
+                "guest_link_qr",
+                "static",
+            }:
                 return None
             return (
                 render_template(
@@ -276,6 +335,7 @@ def create_app(
             volume_percent=volume.get(),
             volume_step=VOLUME_STEP_PERCENT,
             guest_links=_load_guest_link_views(resolved_guest_links, resolved_config),
+            story_stickers=_load_story_sticker_views(resolved_story_stickers, resolved_config, story_sticker_base_url()),
             suggested_guest_base_url=suggest_guest_base_url(),
             last_tag=_last_tag_view(resolved_state, resolved_config),
             recent_events=_event_views(resolved_state),
@@ -320,6 +380,271 @@ def create_app(
         note_tag(uid, source="admin")
         flash(f"Saved {name} as {uid}. Next: add its first sound.", "success")
         return redirect(url_for("index") + f"#character-{uid}")
+
+    @app.post("/photo-stories")
+    def create_photo_story():
+        uid_value = request.form.get("uid", "")
+        name = request.form.get("name", "").strip()
+        label = request.form.get("label", "").strip()
+
+        try:
+            uid = normalize_uid(uid_value)
+            expires_days = _bounded_int(
+                request.form.get("expires_days"),
+                default=14,
+                minimum=1,
+                maximum=90,
+            )
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("index") + "#story-album")
+
+        if not name:
+            flash("Photo story name is required.", "error")
+            return redirect(url_for("index") + "#story-album")
+
+        data = load_raw_config(resolved_config)
+        for raw_uid in list(data):
+            try:
+                existing_uid = normalize_uid(str(raw_uid))
+            except ValueError:
+                continue
+            if existing_uid == uid and raw_uid != uid:
+                data.pop(raw_uid, None)
+
+        folder = unique_character_folder(project_root, name, data, uid)
+        folder.mkdir(parents=True, exist_ok=True)
+        data[uid] = {
+            "name": name,
+            "folder": folder_for_config(folder, project_root),
+            "mode": "first",
+            "kind": "photo_story",
+        }
+        write_raw_config(resolved_config, data)
+        note_tag(uid, source="photo story setup")
+
+        try:
+            link = make_guest_link(
+                resolved_guest_links,
+                uid=uid,
+                label=label or f"{name} story recording",
+                expires_days=expires_days,
+                base_url=guest_link_base_url(request.form.get("base_url", "")),
+            )
+        except (GuestLinkError, ValueError) as exc:
+            note_event(
+                "story",
+                f"Photo story saved for {name}; recording link failed.",
+                uid=uid,
+                character_name=name,
+                level="warning",
+            )
+            flash(f"Saved {name}, but could not create the recording link: {exc}", "warning")
+            return redirect(url_for("index") + f"#character-{uid}")
+
+        guest_path = url_for("guest_recorder", token=link.token)
+        guest_url = (
+            f"{link.base_url}{guest_path}"
+            if link.base_url
+            else url_for("guest_recorder", token=link.token, _external=True)
+        )
+        note_event("story", f"Photo story created for {name}.", uid=uid, character_name=name)
+        flash(f"Photo story ready for {name}. Recording link: {guest_url}", "success")
+        return redirect(url_for("index") + "#guest-links")
+
+    @app.post("/story-stickers")
+    def create_story_sticker_link():
+        uid_value = request.form.get("uid", "").strip()
+        support_code = request.form.get("support_code", "").strip()
+        try:
+            sticker = create_story_sticker(
+                resolved_story_stickers,
+                uid=uid_value,
+                support_code=support_code,
+            )
+        except (StoryStickerError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("index") + "#story-stickers")
+
+        note_event("story", "Story Sticker link created.", uid=sticker.uid or None)
+        flash("Story Sticker link created. Encode or open this URL to record from a phone.", "success")
+        return redirect(url_for("index") + "#story-stickers")
+
+    @app.post("/story-stickers/<token>/bind")
+    def bind_story_sticker(token: str):
+        try:
+            sticker = bind_story_sticker_uid(resolved_story_stickers, token, request.form.get("uid", ""))
+            if sticker.claimed and sticker.uid:
+                _upsert_story_character(
+                    resolved_config,
+                    uid=sticker.uid,
+                    name=sticker.name,
+                    folder_label=sticker.folder,
+                    story_token=sticker.token,
+                )
+        except (StoryStickerError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("index") + "#story-stickers")
+
+        note_event("story", "Story Sticker UID bound.", uid=sticker.uid)
+        flash("Story Sticker UID bound to the link.", "success")
+        return redirect(url_for("index") + "#story-stickers")
+
+    @app.get("/story/<token>/qr.svg")
+    def story_sticker_qr(token: str):
+        try:
+            sticker = get_story_sticker(resolved_story_stickers, token)
+            link_url = absolute_url("story_sticker_page", token=token)
+            label = sticker.support_code or sticker.name or "Story Sticker"
+            return _qr_svg_response(
+                link_url,
+                title=f"{label} QR fallback",
+                filename=f"{_download_slug(label)}-story-qr.svg",
+            )
+        except (StoryStickerError, QRCodeError) as exc:
+            return str(exc), 404
+
+    @app.get("/story/<token>")
+    def story_sticker_page(token: str):
+        try:
+            sticker = get_story_sticker(resolved_story_stickers, token)
+        except StoryStickerError as exc:
+            return (
+                render_template("story_sticker.html", error=str(exc), sticker=None, upload_url="", ffmpeg_available=shutil.which("ffmpeg") is not None),
+                404,
+            )
+
+        return render_template(
+            "story_sticker.html",
+            error=None,
+            sticker=_story_sticker_detail(sticker, resolved_config),
+            upload_url=url_for("save_story_sticker_recording", token=token),
+            ffmpeg_available=shutil.which("ffmpeg") is not None,
+        )
+
+    @app.get("/api/mobile/story-stickers/<token>")
+    def mobile_story_sticker(token: str):
+        try:
+            sticker = get_story_sticker(resolved_story_stickers, token)
+        except StoryStickerError as exc:
+            return jsonify({"ok": False, "message": str(exc)}), 404
+
+        return jsonify(
+            {
+                "ok": True,
+                "story_sticker": _mobile_story_sticker_detail(sticker, resolved_config),
+                "links": {
+                    "web": absolute_url("story_sticker_page", token=token),
+                    "upload": absolute_url("save_mobile_story_sticker_recording", token=token),
+                    "dock_manifest": absolute_url("dock_manifest"),
+                },
+            }
+        )
+
+    @app.get("/api/mobile/story-stickers/<token>/recordings/<path:filename>")
+    def mobile_story_recording_audio(token: str, filename: str):
+        try:
+            sticker = get_story_sticker(resolved_story_stickers, token)
+            if not sticker.folder:
+                from flask import abort
+
+                abort(404)
+            folder = folder_from_config_value(sticker.folder, project_root)
+            path = _safe_character_file(folder, filename)
+        except (StoryStickerError, ValueError):
+            from flask import abort
+
+            abort(404)
+        return send_file(path, mimetype="audio/mpeg" if path.suffix.lower() == ".mp3" else None)
+
+    @app.post("/story/<token>/recordings")
+    def save_story_sticker_recording(token: str):
+        wants_json = request.headers.get("X-Requested-With") == "XMLHttpRequest"
+        return save_story_sticker_recording_response(token, wants_json=wants_json)
+
+    @app.post("/api/mobile/story-stickers/<token>/recordings")
+    def save_mobile_story_sticker_recording(token: str):
+        return save_story_sticker_recording_response(token, wants_json=True)
+
+    def save_story_sticker_recording_response(token: str, *, wants_json: bool):
+        def story_error(message: str, status: int):
+            if wants_json:
+                return jsonify({"ok": False, "message": message}), status
+            return (
+                render_template(
+                    "story_sticker.html",
+                    error=message,
+                    sticker=None,
+                    upload_url="",
+                    ffmpeg_available=shutil.which("ffmpeg") is not None,
+                ),
+                status,
+            )
+
+        try:
+            sticker = get_story_sticker(resolved_story_stickers, token)
+        except StoryStickerError as exc:
+            return story_error(str(exc), 404)
+
+        story_name = request.form.get("story_name", "").strip() or sticker.name
+        title = request.form.get("title", "").strip() or story_name or "story-message"
+        recording = request.files.get("recording") or request.files.get("audio")
+        if not story_name:
+            return story_error("Story name is required.", 400)
+        if recording is None or not recording.filename:
+            return story_error("No audio file received.", 400)
+
+        data = load_raw_config(resolved_config)
+        if sticker.folder:
+            folder = folder_from_config_value(sticker.folder, project_root)
+        else:
+            folder = unique_character_folder(project_root, story_name, data, sticker.uid or f"STORY-{token}")
+        folder.mkdir(parents=True, exist_ok=True)
+        folder_label = folder_for_config(folder, project_root)
+
+        try:
+            claimed = claim_story_sticker(
+                resolved_story_stickers,
+                token,
+                name=story_name,
+                folder=folder_label,
+                uid=sticker.uid,
+            )
+            if claimed.uid:
+                _upsert_story_character(
+                    resolved_config,
+                    uid=claimed.uid,
+                    name=claimed.name,
+                    folder_label=claimed.folder,
+                    story_token=claimed.token,
+                )
+            result = _save_audio_file(folder, recording, title=title)
+        except (StoryStickerError, ValueError) as exc:
+            return story_error(str(exc), 400)
+
+        note_event(
+            "story",
+            f"Story Sticker recording saved for {story_name}.",
+            uid=claimed.uid or None,
+            character_name=story_name,
+        )
+        payload = {
+            "ok": result.playable,
+            "filename": result.filename,
+            "converted": result.converted,
+            "message": result.message,
+            "story": story_name,
+            "can_play_on_box": bool(claimed.uid),
+            "story_sticker": _mobile_story_sticker_detail(claimed, resolved_config),
+            "links": {
+                "web": absolute_url("story_sticker_page", token=token),
+                "self": absolute_url("mobile_story_sticker", token=token),
+                "upload": absolute_url("save_mobile_story_sticker_recording", token=token),
+            },
+        }
+        if not wants_json:
+            return redirect(url_for("story_sticker_page", token=token))
+        return jsonify(payload), 200 if result.playable else 202
 
     @app.post("/characters/<uid>/upload")
     def upload_audio(uid: str):
@@ -512,6 +837,21 @@ def create_app(
             ffmpeg_available=shutil.which("ffmpeg") is not None,
         )
 
+    @app.get("/guest/<token>/qr.svg")
+    def guest_link_qr(token: str):
+        try:
+            link = get_guest_link(resolved_guest_links, token)
+            character = _get_character_or_404(resolved_config, link.uid)
+            guest_path = url_for("guest_recorder", token=link.token)
+            guest_url = f"{link.base_url}{guest_path}" if link.base_url else url_for("guest_recorder", token=link.token, _external=True)
+            return _qr_svg_response(
+                guest_url,
+                title=f"{link.label} QR fallback",
+                filename=f"{_download_slug(character.name)}-guest-qr.svg",
+            )
+        except (GuestLinkError, QRCodeError) as exc:
+            return str(exc), 404
+
     @app.post("/guest/<token>/recordings")
     def save_guest_recording(token: str):
         try:
@@ -607,6 +947,21 @@ def create_app(
             }
         )
 
+    @app.get("/api/dock/manifest")
+    def dock_manifest():
+        return jsonify(_dock_manifest(resolved_config, resolved_story_stickers))
+
+    @app.get("/api/dock/audio/<uid>/<path:filename>")
+    def dock_audio(uid: str, filename: str):
+        character = _get_character_or_404(resolved_config, uid)
+        try:
+            path = _safe_character_file(character.folder, filename)
+        except ValueError:
+            from flask import abort
+
+            abort(404)
+        return send_file(path, mimetype="audio/mpeg")
+
     @app.post("/api/diagnostics")
     def run_diagnostics():
         checks: list[dict[str, str]] = []
@@ -647,6 +1002,7 @@ def create_app(
             project_root=project_root,
             config_path=resolved_config,
             guest_links_path=resolved_guest_links,
+            story_stickers_path=resolved_story_stickers,
             volume_path=resolved_volume,
             control_path=resolved_control,
             state_path=resolved_state,
@@ -723,6 +1079,16 @@ def create_app(
     return app
 
 
+def _qr_svg_response(data: str, *, title: str, filename: str):
+    buffer = BytesIO(make_qr_svg(data, title=title))
+    return send_file(
+        buffer,
+        mimetype="image/svg+xml",
+        as_attachment=True,
+        download_name=filename,
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Magic Character Box web admin")
     parser.add_argument("--config", default=os.getenv("MAGIC_BOX_CONFIG", "config/characters.json"))
@@ -739,6 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--volume-file", default=os.getenv("MAGIC_BOX_VOLUME_FILE"))
     parser.add_argument("--control-file", default=os.getenv("MAGIC_BOX_CONTROL_FILE"))
     parser.add_argument("--guest-links-file", default=os.getenv("MAGIC_BOX_GUEST_LINKS_FILE"))
+    parser.add_argument("--story-stickers-file", default=os.getenv("MAGIC_BOX_STORY_STICKERS_FILE"))
     parser.add_argument("--state-file", default=os.getenv("MAGIC_BOX_STATE_FILE"))
     parser.add_argument(
         "--default-volume",
@@ -795,6 +1162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         volume_file=args.volume_file,
         control_file=args.control_file,
         guest_links_file=args.guest_links_file,
+        story_stickers_file=args.story_stickers_file,
         state_file=args.state_file,
         guest_only=args.guest_only,
         default_volume=args.default_volume,
@@ -896,6 +1264,7 @@ def _load_guest_link_views(guest_links_path: Path, config_path: Path) -> list[Gu
                 character_name=character_name,
                 path=path,
                 url=link_url,
+                qr_url=url_for("guest_link_qr", token=link.token),
                 access_label=access_label,
                 access_hint=access_hint,
                 is_secure=is_secure,
@@ -905,6 +1274,194 @@ def _load_guest_link_views(guest_links_path: Path, config_path: Path) -> list[Gu
             )
         )
     return views
+
+
+def _load_story_sticker_views(story_stickers_path: Path, config_path: Path, base_url: str) -> list[StoryStickerView]:
+    project_root = project_root_for_config(config_path)
+    views: list[StoryStickerView] = []
+    for sticker in sorted(load_story_stickers(story_stickers_path).values(), key=lambda item: item.created_at, reverse=True):
+        path = url_for("story_sticker_page", token=sticker.token)
+        link_url = f"{base_url}{path}" if base_url else url_for("story_sticker_page", token=sticker.token, _external=True)
+        folder_label = sticker.folder
+        playable_count = 0
+        if sticker.folder:
+            folder = folder_from_config_value(sticker.folder, project_root)
+            playable_count = len(_list_audio_files(folder)[0])
+        if sticker.claimed and sticker.uid:
+            status_label = "Ready for dock playback"
+        elif sticker.claimed:
+            status_label = "Recorded, needs UID binding"
+        elif sticker.uid:
+            status_label = "Bound, waiting for recording"
+        else:
+            status_label = "Unclaimed URL"
+
+        views.append(
+            StoryStickerView(
+                token=sticker.token,
+                uid=sticker.uid,
+                support_code=sticker.support_code,
+                name=sticker.name,
+                folder_label=folder_label,
+                playable_count=playable_count,
+                status_label=status_label,
+                path=path,
+                url=link_url,
+                qr_url=url_for("story_sticker_qr", token=sticker.token),
+                can_play_on_box=bool(sticker.claimed and sticker.uid),
+            )
+        )
+    return views
+
+
+def _story_sticker_detail(sticker: StorySticker, config_path: Path) -> dict[str, Any]:
+    recordings = _story_recording_views(sticker, config_path)
+    return {
+        "token": sticker.token,
+        "uid": sticker.uid,
+        "support_code": sticker.support_code,
+        "name": sticker.name,
+        "folder": sticker.folder,
+        "claimed": sticker.claimed,
+        "playable_count": len(recordings),
+        "can_play_on_box": bool(sticker.claimed and sticker.uid),
+        "recordings": recordings,
+    }
+
+
+def _mobile_story_sticker_detail(sticker: StorySticker, config_path: Path) -> dict[str, Any]:
+    detail = _story_sticker_detail(sticker, config_path)
+    if sticker.claimed and sticker.uid:
+        status = "ready_for_dock"
+        next_action = "record_more_or_play"
+    elif sticker.claimed:
+        status = "recorded_needs_uid"
+        next_action = "bind_uid"
+    elif sticker.uid:
+        status = "bound_needs_recording"
+        next_action = "record"
+    else:
+        status = "unclaimed"
+        next_action = "name_and_record"
+
+    return {
+        **detail,
+        "status": status,
+        "next_action": next_action,
+        "needs_uid_binding": bool(sticker.claimed and not sticker.uid),
+    }
+
+
+def _story_recording_views(sticker: StorySticker, config_path: Path) -> list[dict[str, Any]]:
+    if not sticker.folder:
+        return []
+    project_root = project_root_for_config(config_path)
+    folder = folder_from_config_value(sticker.folder, project_root)
+    recordings: list[dict[str, Any]] = []
+    for path in _list_audio_files(folder)[0]:
+        recordings.append(
+            {
+                "filename": path.name,
+                "bytes": path.stat().st_size,
+                "updated_at": datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(),
+                "url": url_for("mobile_story_recording_audio", token=sticker.token, filename=path.name),
+            }
+        )
+    return recordings
+
+
+def _upsert_story_character(
+    config_path: Path,
+    *,
+    uid: str,
+    name: str,
+    folder_label: str,
+    story_token: str,
+) -> None:
+    normalized_uid = normalize_uid(uid)
+    data = load_raw_config(config_path)
+    for raw_uid in list(data):
+        try:
+            if normalize_uid(str(raw_uid)) == normalized_uid and raw_uid != normalized_uid:
+                data.pop(raw_uid, None)
+        except ValueError:
+            continue
+    data[normalized_uid] = {
+        "name": name,
+        "folder": folder_label,
+        "mode": "first",
+        "kind": "photo_story",
+        "story_token": story_token,
+    }
+    write_raw_config(config_path, data)
+
+
+def _download_slug(value: str) -> str:
+    slug = slugify_name(value)
+    return slug or "story-dock"
+
+
+def _dock_manifest(config_path: Path, story_stickers_path: Path) -> dict[str, Any]:
+    project_root = project_root_for_config(config_path)
+    stickers = load_story_stickers(story_stickers_path)
+    tokens_by_uid: dict[str, list[str]] = {}
+    for sticker in stickers.values():
+        if sticker.uid:
+            tokens_by_uid.setdefault(sticker.uid, []).append(sticker.token)
+
+    stories: list[dict[str, Any]] = []
+    for character in _load_characters(config_path):
+        raw_entries = [
+            raw_character
+            for raw_uid, raw_character in load_raw_config(config_path).items()
+            if isinstance(raw_character, dict) and normalize_uid(str(raw_uid)) in character.uids
+        ]
+        kind = next((str(item.get("kind", "")) for item in raw_entries if item.get("kind")), "")
+        story_token = next((str(item.get("story_token", "")) for item in raw_entries if item.get("story_token")), "")
+        tokens = sorted(set([story_token, *[token for uid in character.uids for token in tokens_by_uid.get(uid, [])]]) - {""})
+        files = [
+            {
+                "filename": path.name,
+                "path": folder_for_config(path, project_root),
+                "url": url_for("dock_audio", uid=character.uid, filename=path.name, _external=True),
+                "bytes": path.stat().st_size,
+                "updated_at": datetime.fromtimestamp(path.stat().st_mtime).astimezone().isoformat(),
+            }
+            for path in character.playable_files
+        ]
+        stories.append(
+            {
+                "id": story_token or character.uid,
+                "name": character.name,
+                "kind": kind or "character",
+                "uids": character.uids,
+                "story_tokens": tokens,
+                "mode": character.mode,
+                "files": files,
+                "ready": bool(files),
+            }
+        )
+
+    unbound = [
+        {
+            "token": sticker.token,
+            "support_code": sticker.support_code,
+            "name": sticker.name,
+            "folder": sticker.folder,
+            "claimed": sticker.claimed,
+            "needs_uid_binding": sticker.claimed and not sticker.uid,
+        }
+        for sticker in stickers.values()
+        if not sticker.uid
+    ]
+
+    return {
+        "ok": True,
+        "schema": "story-dock-manifest-v1",
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "stories": stories,
+        "unbound_story_stickers": unbound,
+    }
 
 
 def _expires_label(link: GuestLink) -> str:
@@ -1119,13 +1676,14 @@ def _create_backup_zip(
     project_root: Path,
     config_path: Path,
     guest_links_path: Path,
+    story_stickers_path: Path,
     volume_path: Path,
     control_path: Path,
     state_path: Path,
 ) -> BytesIO:
     buffer = BytesIO()
     with ZipFile(buffer, "w", ZIP_DEFLATED) as archive:
-        for path in [config_path, guest_links_path, volume_path, control_path, state_path]:
+        for path in [config_path, guest_links_path, story_stickers_path, volume_path, control_path, state_path]:
             _zip_file_if_exists(archive, path, project_root)
 
         audio_root = project_root / "audio"
