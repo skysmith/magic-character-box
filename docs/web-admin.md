@@ -334,17 +334,17 @@ The admin page prepares newly uploaded or recorded audio with short fades and lo
 
 For hardware boot/start pops, wire the MAX98357A `SD` shutdown pin to `GPIO16 / physical pin 36` instead of 3.3V, then enable the boot-time low setting described in [wiring.md](wiring.md). The app uses that pin as a boot mute and then leaves the amp enabled between clips, because waking the amp for every clip can create its own pop.
 
-If clip starts still pop, use the persistent audio backend:
+If clip starts still pop, verify the founder audio path before changing hardware:
 
 ```bash
 MAGIC_BOX_AUDIO_BACKEND=mpg123-remote \
-MAGIC_BOX_AUDIO_CMD="mpg123 -q -o pulse" \
+MAGIC_BOX_MAX_OUTPUT_VOLUME=75 \
+MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" \
 MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3 \
-XDG_RUNTIME_DIR=/run/user/1000 \
 python -m magic_box.app --nfc pn532
 ```
 
-The systemd files included in this repo use that backend for the Pi build, plus `magic-character-box-audio-keeper.service`, which plays silent samples through PipeWire so the I2S audio path stays awake between clips.
+The main playback systemd files included in this repo use that backend and do not start `magic-character-box-audio-keeper.service`. The admin systemd files stay on one-shot playback so the dashboard does not hold a second keep-open ALSA client. The older persistent `dmix`/keeper setup is kept only as historical context and should not be enabled on founder cards.
 
 ## Voice Recording
 

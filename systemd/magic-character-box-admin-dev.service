@@ -13,8 +13,10 @@ Environment=MAGIC_BOX_ADMIN_HOST=0.0.0.0
 Environment=MAGIC_BOX_ADMIN_PORT=8080
 Environment=MAGIC_BOX_TRIGGER_FILE=/tmp/magic-character-box-tags.txt
 Environment=MAGIC_BOX_AMP_SD_GPIO=16
-Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
-Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse"
+Environment=MAGIC_BOX_DEFAULT_VOLUME=50
+Environment=MAGIC_BOX_MAX_OUTPUT_VOLUME=75
+Environment=MAGIC_BOX_AUDIO_BACKEND=subprocess
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16"
 ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.admin --config /home/pi/magic-character-box/config/characters.json --nfc mock
 Restart=on-failure
 RestartSec=5

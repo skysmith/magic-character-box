@@ -1,7 +1,7 @@
 [Unit]
 Description=Magic Character Box
-After=multi-user.target sound.target magic-character-box-audio-keeper.service
-Wants=sound.target user@1000.service magic-character-box-audio-keeper.service
+After=multi-user.target sound.target
+Wants=sound.target
 
 [Service]
 Type=simple
@@ -11,9 +11,11 @@ Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=MAGIC_BOX_NFC=pn532
 Environment=MAGIC_BOX_LOG_LEVEL=INFO
 Environment=MAGIC_BOX_AMP_SD_GPIO=16
+Environment=MAGIC_BOX_DEFAULT_VOLUME=50
+Environment=MAGIC_BOX_MAX_OUTPUT_VOLUME=75
 Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16"
 Environment=MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3
-Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse"
 ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.app --config /home/pi/magic-character-box/config/characters.json --nfc pn532
 Restart=on-failure
 RestartSec=5

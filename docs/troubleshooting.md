@@ -55,7 +55,7 @@ Check:
 Quick test:
 
 ```bash
-mpg123 -q -o pulse audio/system/startup-chime.mp3
+mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16 audio/system/startup-chime.mp3
 ```
 
 If you hear clicks but no sound, recheck `BCLK`, `LRC`, and `DIN`; swapped clock pins are a common mistake.
@@ -65,12 +65,31 @@ If you hear clicks but no sound, recheck `BCLK`, `LRC`, and `DIN`; swapped clock
 The recommended build uses three layers of protection:
 
 - MAX98357A `SD` wired to `GPIO16 / physical pin 36`.
-- Persistent `mpg123-remote` playback backend.
-- Silent audio keeper service.
+- Direct `mpg123` playback through `plughw:CARD=MAX98357A,DEV=0` with `-e s16`.
+- `MAGIC_BOX_MAX_OUTPUT_VOLUME=75` to keep dashboard full-volume below raw `mpg123` full scale.
 
 Uploaded and recorded files are also prepared with short fades and loudness normalization when `ffmpeg` is installed.
 
 See [web-admin.md](web-admin.md#reducing-speaker-pops) and [wiring.md](wiring.md).
+
+## Crackly Or Overdriven Audio
+
+If the speaker sounds crunchy while full audio still plays, lower the shared software volume first:
+
+```bash
+cd /home/pi/magic-character-box
+.venv/bin/python - <<'PY'
+from pathlib import Path
+from magic_box.volume import VolumeControl
+
+VolumeControl(Path("config/volume.json")).set(55)
+PY
+sudo systemctl restart magic-character-box magic-character-box-admin
+```
+
+If it still crackles at normal room volume, keep the dashboard volume where it is and lower `MAGIC_BOX_MAX_OUTPUT_VOLUME` in the systemd service override or service file. Values around `65` to `75` are usually safer for a small MAX98357A/passive-speaker path than raw full-scale output.
+
+If volume changes do not affect the crackle, suspect the output path or hardware instead. Founder player services should use `MAGIC_BOX_AUDIO_BACKEND=mpg123-remote` with `MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3` and `mpg123 ... -a plughw:CARD=MAX98357A,DEV=0 ... -e s16`. The admin services intentionally stay on the one-shot `subprocess` backend so they do not hold a second always-open ALSA client. If a deployed box shows `dmix`, `-e s32`, Pulse, a missing player warmup file, or an active `magic-character-box-audio-keeper.service`, restore the app/admin systemd service files or service override, disable the keeper, and restart `magic-character-box` and `magic-character-box-admin`.
 
 ## Browser Recording Does Not Work
 
@@ -125,7 +144,7 @@ Common causes:
 - Weak USB power supply.
 - Missing Python virtual environment.
 - SPI or I2S setup changed before reboot.
-- Audio device is unavailable because PipeWire is not running.
+- Audio device is unavailable because the MAX98357A ALSA card is missing or the service is pointing at the wrong output path.
 
 ## Running Out Of Space
 
