@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from magic_box.app import _play_system_sound, _resolve_optional_audio_path
+from magic_box.app import _TagPlaybackState, _play_system_sound, _resolve_optional_audio_path
 
 
 class AppSystemSoundTests(unittest.TestCase):
@@ -37,6 +37,45 @@ class AppSystemSoundTests(unittest.TestCase):
         _play_system_sound(player, Path("/tmp/does-not-exist.mp3"), "startup")
 
         self.assertEqual(player.events, [])
+
+
+class TagPlaybackStateTests(unittest.TestCase):
+    def test_same_uid_cannot_interrupt_itself_while_audio_is_active(self) -> None:
+        state = _TagPlaybackState()
+
+        self.assertTrue(
+            state.should_handle("DINOSAUR", now=0.0, removal_debounce=3.0, active_audio_playing=False)
+        )
+        state.note_audio_started("DINOSAUR")
+        self.assertFalse(state.should_handle(None, now=1.0, removal_debounce=3.0, active_audio_playing=True))
+        self.assertFalse(state.should_handle(None, now=4.1, removal_debounce=3.0, active_audio_playing=True))
+
+        self.assertFalse(
+            state.should_handle("DINOSAUR", now=4.2, removal_debounce=3.0, active_audio_playing=True)
+        )
+
+    def test_different_uid_can_interrupt_active_audio(self) -> None:
+        state = _TagPlaybackState()
+
+        self.assertTrue(state.should_handle("DINOSAUR", now=0.0, removal_debounce=3.0, active_audio_playing=False))
+        state.note_audio_started("DINOSAUR")
+        self.assertFalse(state.should_handle(None, now=4.0, removal_debounce=3.0, active_audio_playing=True))
+
+        self.assertTrue(state.should_handle("ROCKET", now=4.1, removal_debounce=3.0, active_audio_playing=True))
+
+    def test_same_uid_can_replay_after_audio_is_finished_and_tag_was_removed(self) -> None:
+        state = _TagPlaybackState()
+
+        self.assertTrue(
+            state.should_handle("DINOSAUR", now=0.0, removal_debounce=3.0, active_audio_playing=False)
+        )
+        state.note_audio_started("DINOSAUR")
+        self.assertFalse(state.should_handle(None, now=1.0, removal_debounce=3.0, active_audio_playing=False))
+        self.assertFalse(state.should_handle(None, now=4.1, removal_debounce=3.0, active_audio_playing=False))
+
+        self.assertTrue(
+            state.should_handle("DINOSAUR", now=4.2, removal_debounce=3.0, active_audio_playing=False)
+        )
 
 
 class _FakePlayer:

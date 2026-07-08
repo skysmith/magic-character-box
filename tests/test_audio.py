@@ -2,7 +2,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from magic_box.audio import AudioPlayer, _apply_mpg123_volume, _build_mpg123_remote_args, _uses_pulse_output
+from magic_box.audio import (
+    AudioPlayer,
+    _apply_mpg123_volume,
+    _build_mpg123_remote_args,
+    _mpg123_status_is_playing,
+    _uses_pulse_output,
+)
 
 
 class AudioTests(unittest.TestCase):
@@ -47,6 +53,11 @@ class AudioTests(unittest.TestCase):
             _build_mpg123_remote_args(["mpg123", "-q", "-o", "pulse", "-f", "1000"]),
             ["mpg123", "-q", "-o", "pulse", "-R", "--keep-open"],
         )
+
+    def test_mpg123_remote_status_detects_playing_state(self) -> None:
+        self.assertIsNone(_mpg123_status_is_playing("@R MPG123"))
+        self.assertTrue(_mpg123_status_is_playing("@P 2"))
+        self.assertFalse(_mpg123_status_is_playing("@P 0"))
 
     def test_pulse_output_is_detected(self) -> None:
         self.assertTrue(_uses_pulse_output("mpg123 -q -o pulse"))

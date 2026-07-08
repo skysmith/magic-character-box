@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
@@ -195,8 +196,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _safe_append_event(state_path, "system", "Box started.")
     _play_system_sound(player, startup_sound, "startup")
 
-    active_uid: str | None = None
-    absent_since: float | None = None
+    tag_state = _TagPlaybackState()
 
     try:
         while True:
@@ -216,36 +216,32 @@ def main(argv: Sequence[str] | None = None) -> int:
                 continue
 
             now = time.monotonic()
-            if not uid:
-                if active_uid is not None:
-                    if absent_since is None:
-                        absent_since = now
-                    elif now - absent_since >= args.removal_debounce:
-                        LOGGER.debug("Tag %s removed", active_uid)
-                        active_uid = None
-                        absent_since = None
-                time.sleep(args.poll_interval)
+            if not tag_state.should_handle(
+                uid,
+                now=now,
+                removal_debounce=args.removal_debounce,
+                active_audio_playing=player.is_playing(),
+            ):
+                if not uid:
+                    time.sleep(args.poll_interval)
+                else:
+                    LOGGER.debug("Ignoring still-present or self-interrupting tag %s", uid)
                 continue
-
-            absent_since = None
-            if uid == active_uid:
-                LOGGER.debug("Ignoring still-present tag %s", uid)
-                continue
-
-            active_uid = uid
 
             character = config.lookup(uid)
             if character is None:
                 LOGGER.warning("Unknown tag %s", uid)
                 _safe_record_tag(state_path, uid, known=False, source="playback")
-                _play_system_sound(player, unknown_sound, "unknown tag")
+                if _play_system_sound(player, unknown_sound, "unknown tag"):
+                    tag_state.note_audio_started(uid)
                 continue
 
             LOGGER.info("Playing %s (%s)", character.name, character.uid)
             _safe_record_tag(state_path, uid, known=True, character_name=character.name, source="playback")
             _safe_append_event(state_path, "audio", f"{character.name} played.", uid=uid, character_name=character.name)
             player.stop_current()
-            player.play_folder(character.folder, character.mode)
+            if player.play_folder(character.folder, character.mode):
+                tag_state.note_audio_started(uid)
     except KeyboardInterrupt:
         LOGGER.info("Interrupted")
         return 130
@@ -263,14 +259,52 @@ def _resolve_optional_audio_path(config_path: Path, value: str | None) -> Path |
     return path.resolve()
 
 
-def _play_system_sound(player: AudioPlayer, path: Path | None, label: str) -> None:
+@dataclass
+class _TagPlaybackState:
+    active_uid: str | None = None
+    absent_since: float | None = None
+    playing_uid: str | None = None
+
+    def should_handle(
+        self,
+        uid: str | None,
+        *,
+        now: float,
+        removal_debounce: float,
+        active_audio_playing: bool,
+    ) -> bool:
+        if not uid:
+            if self.active_uid is not None:
+                if self.absent_since is None:
+                    self.absent_since = now
+                elif now - self.absent_since >= removal_debounce:
+                    LOGGER.debug("Tag %s removed", self.active_uid)
+                    self.active_uid = None
+                    self.absent_since = None
+            return False
+
+        self.absent_since = None
+        if uid == self.active_uid:
+            return False
+        if uid == self.playing_uid and active_audio_playing:
+            self.active_uid = uid
+            return False
+
+        self.active_uid = uid
+        return True
+
+    def note_audio_started(self, uid: str) -> None:
+        self.playing_uid = uid
+
+
+def _play_system_sound(player: AudioPlayer, path: Path | None, label: str) -> bool:
     if path is None:
-        return
+        return False
     if not path.exists():
         LOGGER.info("Skipping %s sound; file not found: %s", label, path)
-        return
+        return False
     player.stop_current()
-    player.play_file(path)
+    return player.play_file(path)
 
 
 def _safe_record_tag(

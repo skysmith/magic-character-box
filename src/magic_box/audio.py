@@ -48,6 +48,7 @@ class AudioPlayer:
         self.use_remote_volume = (not _uses_pulse_output(command)) if use_remote_volume is None else use_remote_volume
         self._current_process: subprocess.Popen[bytes] | None = None
         self._remote_process: subprocess.Popen[str] | None = None
+        self._remote_is_playing = False
         self._sequence_positions: dict[Path, int] = {}
         self._lock = threading.RLock()
         if not self.mute_between_tracks:
@@ -57,6 +58,16 @@ class AudioPlayer:
         if self.use_mpg123_remote and not self.dry_run:
             self._start_remote()
             self._warm_up_remote()
+
+    def is_playing(self) -> bool:
+        if self.use_mpg123_remote:
+            with self._lock:
+                process = self._remote_process
+                return process is not None and process.poll() is None and self._remote_is_playing
+
+        with self._lock:
+            process = self._current_process
+        return process is not None and process.poll() is None
 
     def find_files(self, folder: Path) -> list[Path]:
         if not folder.exists() or not folder.is_dir():
@@ -113,6 +124,8 @@ class AudioPlayer:
     def stop_current(self) -> None:
         if self.use_mpg123_remote:
             self._send_remote("STOP")
+            with self._lock:
+                self._remote_is_playing = False
             return
 
         with self._lock:
@@ -183,7 +196,11 @@ class AudioPlayer:
             return False
         if not self.use_remote_volume and not self._send_remote("VOLUME 100"):
             return False
-        return self._send_remote(f"LOAD {path}")
+        if not self._send_remote(f"LOAD {path}"):
+            return False
+        with self._lock:
+            self._remote_is_playing = True
+        return True
 
     def _warm_up_remote(self) -> None:
         if self.warmup_file is None or not self.warmup_file.exists():
@@ -208,7 +225,7 @@ class AudioPlayer:
                 process = subprocess.Popen(
                     args,
                     stdin=subprocess.PIPE,
-                    stdout=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
                     text=True,
                 )
@@ -220,6 +237,8 @@ class AudioPlayer:
                 return False
 
             self._remote_process = process
+            self._remote_is_playing = False
+            self._watch_remote_status(process)
             LOGGER.info("Started mpg123 remote audio backend")
             return True
 
@@ -244,6 +263,7 @@ class AudioPlayer:
         with self._lock:
             process = self._remote_process
             self._remote_process = None
+            self._remote_is_playing = False
         if process is None:
             return
 
@@ -260,6 +280,27 @@ class AudioPlayer:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait(timeout=1)
+
+    def _watch_remote_status(self, process: subprocess.Popen[str]) -> None:
+        def read_status() -> None:
+            stdout = process.stdout
+            if stdout is None:
+                return
+            try:
+                for line in stdout:
+                    playing = _mpg123_status_is_playing(line)
+                    if playing is None:
+                        continue
+                    with self._lock:
+                        if self._remote_process is process:
+                            self._remote_is_playing = playing
+            finally:
+                with self._lock:
+                    if self._remote_process is process:
+                        self._remote_is_playing = False
+
+        thread = threading.Thread(target=read_status, daemon=True)
+        thread.start()
 
 
 def _apply_mpg123_volume(args: list[str], volume_percent: int) -> list[str]:
@@ -312,6 +353,15 @@ def _is_mpg123_command(command: str) -> bool:
 def _uses_pulse_output(command: str) -> bool:
     args = shlex.split(command)
     return any(args[index] in {"-o", "--output"} and index + 1 < len(args) and args[index + 1] == "pulse" for index in range(len(args)))
+
+
+def _mpg123_status_is_playing(line: str) -> bool | None:
+    if not line.startswith("@P "):
+        return None
+    parts = line.strip().split()
+    if len(parts) < 2:
+        return None
+    return parts[1] == "2"
 
 
 def _mpg123_scalefactor(volume_percent: int) -> int:
