@@ -339,12 +339,18 @@ If clip starts still pop, verify the founder audio path before changing hardware
 ```bash
 MAGIC_BOX_AUDIO_BACKEND=mpg123-remote \
 MAGIC_BOX_MAX_OUTPUT_VOLUME=75 \
+MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0 \
 MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" \
 MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3 \
 python -m magic_box.app --nfc pn532
 ```
 
-The main playback systemd files included in this repo use that backend and do not start `magic-character-box-audio-keeper.service`. The admin systemd files stay on one-shot playback so the dashboard does not hold a second keep-open ALSA client. The older persistent `dmix`/keeper setup is kept only as historical context and should not be enabled on founder cards.
+The main playback systemd files included in this repo use that backend, keep
+the amp enabled between clips, and do not start
+`magic-character-box-audio-keeper.service`. The admin systemd files stay on
+one-shot playback so the dashboard does not hold a second keep-open ALSA client.
+The older persistent `dmix`/keeper setup is kept only as historical context and
+should not be enabled on founder cards.
 
 ## Voice Recording
 

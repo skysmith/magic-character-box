@@ -38,7 +38,7 @@ Add this to `/boot/firmware/config.txt` so the Pi holds GPIO16 low early in boot
 gpio=16=op,dl
 ```
 
-The systemd services set `MAGIC_BOX_AMP_SD_GPIO=16`, so after this rewire the app and admin page will automatically use the mute gate. By default the amp is left enabled between clips because some MAX98357A boards make a click when `SD` wakes the amp. If your board still pops before Linux applies the GPIO setting, add a physical pulldown resistor from `SD` to `GND` as a hardware refinement.
+The systemd services set `MAGIC_BOX_AMP_SD_GPIO=16`, so after this rewire the app and admin page will automatically use the mute gate. The player services also set `MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0`, leaving the amp enabled between clips because some MAX98357A boards make a click when `SD` wakes the amp. If your board still pops before Linux applies the GPIO setting, add a physical pulldown resistor from `SD` to `GND` as a hardware refinement.
 
 The deployed Pi player service keeps `mpg123` open in remote mode through `plughw:CARD=MAX98357A,DEV=0` using `-e s16`, with `audio/system/silence.mp3` as a startup warmup file. That avoids relying on a user-session Pulse/PipeWire socket, avoids reopening the I2S path for every tap, and avoids the retired `dmix`/keeper stream that distorted some founder-card builds.
 
