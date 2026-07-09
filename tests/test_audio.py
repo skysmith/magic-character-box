@@ -76,6 +76,22 @@ class AudioTests(unittest.TestCase):
 
         self.assertEqual(gate.events, ["unmute"])
 
+    def test_remote_stop_is_noop_when_idle(self) -> None:
+        player = _RemoteCommandAudioPlayer()
+
+        player.stop_current()
+
+        self.assertEqual(player.commands, [])
+
+    def test_remote_stop_still_interrupts_active_audio(self) -> None:
+        player = _RemoteCommandAudioPlayer()
+        player._remote_is_playing = True
+
+        player.stop_current()
+
+        self.assertEqual(player.commands, ["STOP"])
+        self.assertFalse(player._remote_is_playing)
+
 
 class _FakeAmpGate:
     def __init__(self) -> None:
@@ -89,6 +105,16 @@ class _FakeAmpGate:
 
     def close(self) -> None:
         self.events.append("close")
+
+
+class _RemoteCommandAudioPlayer(AudioPlayer):
+    def __init__(self) -> None:
+        super().__init__(command="mpg123 -q", dry_run=True, use_mpg123_remote=True)
+        self.commands: list[str] = []
+
+    def _send_remote(self, command: str) -> bool:
+        self.commands.append(command)
+        return True
 
 
 if __name__ == "__main__":

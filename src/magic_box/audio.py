@@ -126,9 +126,11 @@ class AudioPlayer:
 
     def stop_current(self) -> None:
         if self.use_mpg123_remote:
-            self._send_remote("STOP")
             with self._lock:
+                if not self._remote_is_playing:
+                    return
                 self._remote_is_playing = False
+            self._send_remote("STOP")
             return
 
         with self._lock:
