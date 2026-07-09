@@ -522,7 +522,191 @@ function extensionForMime(mimeType) {
   return "webm";
 }
 
+const wifiPanel = document.querySelector("[data-wifi-panel]");
 const bluetoothPanel = document.querySelector("[data-bluetooth-panel]");
+
+if (wifiPanel) {
+  const refreshButton = wifiPanel.querySelector("[data-wifi-refresh]");
+  const scanButtonWifi = wifiPanel.querySelector("[data-wifi-scan]");
+  const connectForm = wifiPanel.querySelector("[data-wifi-connect]");
+  const connectButton = wifiPanel.querySelector("[data-wifi-connect-button]");
+  const ssidInput = wifiPanel.querySelector("[data-wifi-ssid-input]");
+  const passwordInput = wifiPanel.querySelector("[data-wifi-password-input]");
+  const statusLine = wifiPanel.querySelector("[data-wifi-status]");
+  const reconnectSuccess = wifiPanel.querySelector("[data-reconnect-success]");
+  const adapterValue = wifiPanel.querySelector("[data-wifi-adapter]");
+  const messageValue = wifiPanel.querySelector("[data-wifi-message]");
+  const ssidValue = wifiPanel.querySelector("[data-wifi-ssid]");
+  const deviceValue = wifiPanel.querySelector("[data-wifi-device]");
+  const countValue = wifiPanel.querySelector("[data-wifi-count]");
+  const networkList = wifiPanel.querySelector("[data-wifi-networks]");
+  const optionList = wifiPanel.querySelector("[data-wifi-options]");
+  let wifiAvailable = false;
+
+  refreshButton?.addEventListener("click", () => {
+    refreshWifiStatus("Refreshing Wi-Fi...");
+  });
+
+  scanButtonWifi?.addEventListener("click", async () => {
+    await runWifiRequest("/api/wifi/scan", {
+      label: "Finding Wi-Fi...",
+      busyButton: scanButtonWifi,
+      busyText: "Finding...",
+    });
+  });
+
+  connectForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const ssid = ssidInput?.value?.trim() || "";
+    const password = passwordInput?.value || "";
+    const payload = await runWifiRequest("/api/wifi/connect", {
+      label: `Connecting to ${ssid || "Wi-Fi"}...`,
+      busyButton: connectButton,
+      busyText: "Connecting...",
+      fetchOptions: {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ssid, password }),
+      },
+    });
+    if (payload?.ok && reconnectSuccess) {
+      reconnectSuccess.hidden = false;
+      if (networkList) {
+        networkList.hidden = true;
+      }
+    }
+    if (passwordInput) {
+      passwordInput.value = "";
+    }
+  });
+
+  networkList?.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-wifi-use-network]");
+    if (!button || !ssidInput) {
+      return;
+    }
+    const network = button.closest("[data-wifi-network-ssid]");
+    const ssid = network?.dataset.wifiNetworkSsid;
+    if (ssid) {
+      ssidInput.value = ssid;
+      passwordInput?.focus();
+    }
+  });
+
+  refreshWifiStatus();
+
+  async function refreshWifiStatus(label = "") {
+    if (label && statusLine) {
+      statusLine.textContent = label;
+    }
+    try {
+      const response = await fetch("/api/wifi/status");
+      const payload = await response.json();
+      updateWifiPanel(payload);
+      if (label && statusLine) {
+        statusLine.textContent = payload.message || "";
+      }
+    } catch (error) {
+      if (statusLine) {
+        statusLine.textContent = `Wi-Fi refresh failed: ${error}`;
+      }
+    }
+  }
+
+  async function runWifiRequest(url, options = {}) {
+    const fetchOptions = options.fetchOptions || {};
+    const button = options.busyButton || null;
+    const originalText = button?.textContent || "";
+
+    if (statusLine && options.label) {
+      statusLine.textContent = options.label;
+    }
+    if (button) {
+      button.disabled = true;
+      button.textContent = options.busyText || "Working...";
+    }
+
+    try {
+      const response = await fetch(url, { method: "POST", ...fetchOptions });
+      const payload = await response.json();
+      updateWifiPanel(payload);
+      if (statusLine) {
+        statusLine.textContent = payload.message || (response.ok ? "Wi-Fi action complete." : "Wi-Fi action failed.");
+      }
+      return payload;
+    } catch (error) {
+      if (statusLine) {
+        statusLine.textContent = `Wi-Fi action failed: ${error}`;
+      }
+      return null;
+    } finally {
+      if (button) {
+        button.disabled = button === scanButtonWifi || button === connectButton ? !wifiAvailable : false;
+        button.textContent = originalText;
+      }
+    }
+  }
+
+  function updateWifiPanel(payload) {
+    const available = payload.available === true;
+    wifiAvailable = available;
+
+    if (adapterValue) {
+      adapterValue.textContent = available ? (payload.powered ? "on" : "off") : "unavailable";
+    }
+    if (messageValue) {
+      messageValue.textContent = payload.message || "";
+    }
+    if (ssidValue) {
+      ssidValue.textContent = payload.ssid || "not connected";
+    }
+    if (deviceValue) {
+      deviceValue.textContent = payload.device || "No Wi-Fi device found.";
+    }
+    if (countValue) {
+      countValue.textContent = Array.isArray(payload.networks) ? String(payload.networks.length) : "0";
+    }
+    if (scanButtonWifi) {
+      scanButtonWifi.disabled = !available;
+    }
+    if (connectButton) {
+      connectButton.disabled = !available;
+    }
+    renderWifiNetworks(payload.networks || [], available);
+  }
+
+  function renderWifiNetworks(networks, available) {
+    if (optionList) {
+      optionList.innerHTML = networks.map((network) => `<option value="${escapeHtml(network.ssid || "")}"></option>`).join("");
+    }
+    if (!networkList) {
+      return;
+    }
+    networkList.hidden = false;
+    if (!networks.length) {
+      networkList.innerHTML = '<p class="empty-state">No networks listed yet. Tap Find Wi-Fi.</p>';
+      return;
+    }
+
+    networkList.innerHTML = networks.map((network) => wifiNetworkHtml(network, available)).join("");
+  }
+
+  function wifiNetworkHtml(network, available) {
+    const signal = network.signal ?? "unknown";
+    const security = network.security ? ` · ${escapeHtml(network.security)}` : "";
+    const labels = network.active ? '<span>connected</span>' : "";
+    const disabled = available ? "" : " disabled";
+    return `
+      <article class="wifi-network" data-wifi-network-ssid="${escapeHtml(network.ssid || "")}">
+        <div>
+          <h3>${escapeHtml(network.ssid || "Hidden network")}</h3>
+          <p class="muted">${escapeHtml(signal)}% signal${security}</p>
+          <p class="tag-list">${labels}</p>
+        </div>
+        <button class="button button-secondary" type="button" data-wifi-use-network${disabled}>Choose</button>
+      </article>
+    `;
+  }
+}
 
 if (bluetoothPanel) {
   const refreshButton = bluetoothPanel.querySelector("[data-bluetooth-refresh]");

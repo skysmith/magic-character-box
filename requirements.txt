@@ -4,6 +4,7 @@ Flask>=3.0,<4
 segno>=1.6,<2
 
 # Raspberry Pi hardware support. These are only needed for PN532/GPIO usage.
-adafruit-blinka; platform_system == "Linux" and (platform_machine == "armv7l" or platform_machine == "aarch64")
-adafruit-circuitpython-pn532; platform_system == "Linux" and (platform_machine == "armv7l" or platform_machine == "aarch64")
-gpiozero; platform_system == "Linux" and (platform_machine == "armv7l" or platform_machine == "aarch64")
+adafruit-blinka; platform_system == "Linux" and (platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64")
+adafruit-circuitpython-pn532; platform_system == "Linux" and (platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64")
+gpiozero; platform_system == "Linux" and (platform_machine == "armv6l" or platform_machine == "armv7l" or platform_machine == "aarch64")
+RPi.GPIO; platform_system == "Linux" and (platform_machine == "armv6l" or platform_machine == "armv7l")

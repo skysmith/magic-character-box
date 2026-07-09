@@ -48,11 +48,16 @@ class AudioTests(unittest.TestCase):
             ["mpg123", "-q", "-f", "8192"],
         )
 
-    def test_mpg123_volume_honors_max_output_ceiling(self) -> None:
+    def test_mpg123_volume_honors_output_ceiling(self) -> None:
         self.assertEqual(
-            _apply_mpg123_volume(["mpg123", "-q"], 100, 75),
+            _apply_mpg123_volume(["mpg123", "-q"], 100, max_output_percent=75),
             ["mpg123", "-q", "-f", "24576"],
         )
+
+    def test_remote_volume_honors_output_ceiling(self) -> None:
+        player = AudioPlayer(dry_run=True, volume_getter=lambda: 80, max_output_percent=75)
+
+        self.assertEqual(player._volume_percent(), 60.0)
 
     def test_remote_args_keep_player_open_and_remove_scalefactor(self) -> None:
         self.assertEqual(

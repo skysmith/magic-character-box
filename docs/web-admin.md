@@ -45,6 +45,22 @@ python -m magic_box.admin --nfc mock --host 127.0.0.1 --port 8080 --dry-run-audi
 In mock mode, browser scanning is disabled; type the UID manually.
 If the Scan button is disabled and the page says "Browser scan is unavailable here," the admin is running in mock mode, not PN532 mode.
 
+## Recovery Wi-Fi Page
+
+When the box is broadcasting its setup/recovery Wi-Fi network, open:
+
+```text
+http://10.42.0.1:8080/
+```
+
+That address lands on a single-purpose reconnect page instead of the full dashboard. The page should only ask for the home Wi-Fi network and password, then hand the box back to the normal network. If the browser loses the page after clicking `Reconnect Story Dock`, that usually means the box left setup mode and is joining Wi-Fi.
+
+The full local dashboard is still available for support and advanced setup at:
+
+```text
+http://10.42.0.1:8080/admin
+```
+
 ## What It Does
 
 - Shows registered characters.
@@ -62,6 +78,7 @@ If the Scan button is disabled and the page says "Browser scan is unavailable he
 - Tests playback through the same audio command used by the box app.
 - Stops device playback by sending a local request to the main playback service.
 - Sets shared software volume in `config/volume.json`.
+- Shows Wi-Fi status and can scan/connect through NetworkManager on the Pi.
 - Exposes an experimental Bluetooth control socket for future prototype playback work.
 - Gives quick guidance for custom 3D printed figures.
 - Switches between setup scanning and child playback mode from the top of the page on the Pi.
@@ -282,9 +299,23 @@ That file is runtime state, not a hand-edited config. It is useful for troublesh
 
 ## Volume
 
-The MAX98357A I2S amp usually does not expose a hardware mixer to `amixer`. On the no-pop Pi setup, the `+` and `-` buttons save a shared volume percentage in `config/volume.json` and apply it to the PipeWire default sink with `wpctl set-volume`.
+The MAX98357A I2S amp usually does not expose a hardware mixer to `amixer`. On the founder Pi setup, the `+` and `-` buttons save a shared volume percentage in `config/volume.json` and apply it to `mpg123` software volume on the direct ALSA `plughw` speaker path.
 
-That keeps the silent keeper stream running while still changing the loudness of real clips. If PipeWire is unavailable, the app falls back to per-player software volume.
+The service files also set `MAGIC_BOX_MAX_OUTPUT_VOLUME=75` as a small-speaker safety ceiling. With that ceiling, dashboard volume still shows 0-100%, but 100% maps to 75% of `mpg123` full-scale output so the MAX98357A and small passive speaker are less likely to crackle from overdrive. If a larger speaker needs more headroom, raise that environment value and restart the services.
+
+If you intentionally override playback to Pulse/PipeWire for Bluetooth experiments, the app uses `wpctl` when available and falls back to per-player software volume otherwise.
+
+## Wi-Fi Controls
+
+The dashboard includes a local Wi-Fi panel when the Pi has NetworkManager's
+`nmcli` command. It shows whether Wi-Fi is on, the current connection name,
+and the Wi-Fi device name. Use `Scan` to list nearby networks, choose one,
+enter the password locally, and connect.
+
+The dashboard does not store or display Wi-Fi passwords after submit. Keep the
+full admin page on a trusted local network or trusted Tailscale HTTPS, because
+it still has maintenance controls such as shutdown, backups, scanning, and
+network changes.
 
 ## Experimental Bluetooth Socket
 
@@ -297,13 +328,13 @@ The admin page includes a deliberately secondary Bluetooth panel with:
 - Scan for nearby devices.
 - Pair, connect, disconnect, and `Use for audio` buttons.
 
-The panel shells out to `bluetoothctl` for Bluetooth actions. `Use for audio` also tries to make the matching `bluez_output` Pulse/PipeWire sink the default output using `pactl`. The Pi services already use:
+The panel shells out to `bluetoothctl` for Bluetooth actions. `Use for audio` also tries to make the matching `bluez_output` Pulse/PipeWire sink the default output using `pactl`. The Pi services default to the wired MAX98357A speaker:
 
 ```text
-MAGIC_BOX_AUDIO_CMD=mpg123 -q -o pulse
+MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16
 ```
 
-That means playback follows the Pi's default Pulse/PipeWire sink. If a Bluetooth speaker is connected and selected as the default sink, character audio should play through it without changing character folders or NFC behavior.
+That means Bluetooth speaker output is not part of the default finished-box path. If you want character audio to follow the Pi's default Pulse/PipeWire sink for a prototype, override the service audio command to `mpg123 -q -o pulse` and restart the services after selecting the Bluetooth sink.
 
 Install support tools on the Pi if they are missing:
 

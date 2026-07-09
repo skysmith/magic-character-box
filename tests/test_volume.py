@@ -30,10 +30,13 @@ class VolumeTests(unittest.TestCase):
         self.assertEqual(args[:3], ["/usr/bin/wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@"])
         self.assertEqual(args[3], "0.650")
 
-    def test_effective_output_volume_applies_speaker_ceiling(self) -> None:
+    def test_effective_output_volume_applies_ceiling(self) -> None:
         self.assertEqual(effective_output_volume(100, 75), 75)
         self.assertEqual(effective_output_volume(60, 75), 45)
         self.assertEqual(effective_output_volume(200, 75), 75)
+        self.assertEqual(effective_output_volume(80, 75), 60)
+        self.assertEqual(effective_output_volume(120, 75), 75)
+        self.assertEqual(effective_output_volume(80, 120), 80)
 
 
 if __name__ == "__main__":

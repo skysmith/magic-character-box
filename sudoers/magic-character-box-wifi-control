@@ -1,0 +1,2 @@
+# Let the local admin UI manage Wi-Fi during setup without running as root.
+pi ALL=(root) NOPASSWD: /usr/local/bin/magic-character-box-wifi-control *

@@ -1,8 +1,17 @@
 from pathlib import Path
+import json
+import os
 import tempfile
 import unittest
 
-from magic_box.app import _TagPlaybackState, _play_system_sound, _resolve_optional_audio_path
+from magic_box.app import (
+    _TagPlaybackState,
+    _config_mtime,
+    _play_system_sound,
+    _reload_config_if_changed,
+    _resolve_optional_audio_path,
+)
+from magic_box.config import CharacterConfig
 
 
 class AppSystemSoundTests(unittest.TestCase):
@@ -37,6 +46,54 @@ class AppSystemSoundTests(unittest.TestCase):
         _play_system_sound(player, Path("/tmp/does-not-exist.mp3"), "startup")
 
         self.assertEqual(player.events, [])
+
+    def test_reload_config_if_changed_picks_up_new_mapping(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config" / "characters.json"
+            config_path.parent.mkdir()
+            first_audio = root / "audio" / "first"
+            second_audio = root / "audio" / "second"
+            first_audio.mkdir(parents=True)
+            second_audio.mkdir(parents=True)
+            _write_config(config_path, {"04-A1": {"name": "First", "folder": "audio/first", "mode": "first"}})
+            config = CharacterConfig.load(config_path)
+            last_mtime = _config_mtime(config_path)
+
+            _write_config(
+                config_path,
+                {
+                    "04-A1": {"name": "First", "folder": "audio/first", "mode": "first"},
+                    "04-B2": {"name": "Second", "folder": "audio/second", "mode": "first"},
+                },
+                mtime_offset=5,
+            )
+
+            updated, updated_mtime, reloaded = _reload_config_if_changed(config_path, config, last_mtime)
+
+            self.assertTrue(reloaded)
+            self.assertNotEqual(updated_mtime, last_mtime)
+            self.assertEqual(updated.lookup("04-B2").name, "Second")
+
+    def test_reload_config_if_changed_keeps_current_config_when_rewrite_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config" / "characters.json"
+            config_path.parent.mkdir()
+            first_audio = root / "audio" / "first"
+            first_audio.mkdir(parents=True)
+            _write_config(config_path, {"04-A1": {"name": "First", "folder": "audio/first", "mode": "first"}})
+            config = CharacterConfig.load(config_path)
+            last_mtime = _config_mtime(config_path)
+            config_path.write_text("{not-json", encoding="utf-8")
+            os.utime(config_path, (last_mtime + 5, last_mtime + 5))
+
+            with self.assertLogs("magic_box.app", level="WARNING"):
+                updated, updated_mtime, reloaded = _reload_config_if_changed(config_path, config, last_mtime)
+
+            self.assertFalse(reloaded)
+            self.assertNotEqual(updated_mtime, last_mtime)
+            self.assertEqual(updated.lookup("04-A1").name, "First")
 
 
 class TagPlaybackStateTests(unittest.TestCase):
@@ -88,6 +145,13 @@ class _FakePlayer:
     def play_file(self, path: Path) -> bool:
         self.events.append(("play", path))
         return True
+
+
+def _write_config(path: Path, data: dict[str, object], *, mtime_offset: float = 0.0) -> None:
+    path.write_text(json.dumps(data), encoding="utf-8")
+    if mtime_offset:
+        current = path.stat().st_mtime
+        os.utime(path, (current + mtime_offset, current + mtime_offset))
 
 
 if __name__ == "__main__":

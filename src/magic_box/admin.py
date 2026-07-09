@@ -63,17 +63,31 @@ from .story_stickers import (
 )
 from .system_mode import ServiceModeController
 from .volume import (
+    DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
     DEFAULT_VOLUME_PERCENT,
     VOLUME_STEP_PERCENT,
     VolumeControl,
     apply_pipewire_volume,
+    effective_output_volume,
     volume_file_for_config,
 )
+from .wifi import WifiController
 
 
 LOGGER = logging.getLogger(__name__)
 UPLOAD_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".webm", ".mp4"}
 PLAYABLE_EXTENSIONS = {".mp3"}
+CAPTIVE_PORTAL_PROBE_PATHS = (
+    "/hotspot-detect.html",
+    "/library/test/success.html",
+    "/generate_204",
+    "/gen_204",
+    "/connecttest.txt",
+    "/ncsi.txt",
+    "/canonical.html",
+    "/success.txt",
+)
+DEFAULT_RECOVERY_HOSTS = "10.42.0.1,storydock.setup,storydock.local,storydock"
 
 
 @dataclass(frozen=True)
@@ -157,6 +171,7 @@ def create_app(
     dry_run_audio: bool = False,
     volume_file: str | Path | None = None,
     default_volume: int = DEFAULT_VOLUME_PERCENT,
+    max_output_volume: int = DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
     amp_sd_gpio: int | None = None,
     amp_unmute_delay: float = 0.12,
     amp_mute_delay: float = 0.05,
@@ -169,6 +184,7 @@ def create_app(
     state_file: str | Path | None = None,
     guest_only: bool = False,
     bluetooth_controller: BluetoothController | None = None,
+    wifi_controller: WifiController | None = None,
     mode_controller: ServiceModeController | None = None,
 ) -> Flask:
     app = Flask(__name__)
@@ -192,12 +208,13 @@ def create_app(
     )
     resolved_state = Path(state_file).expanduser().resolve() if state_file else state_file_for_config(resolved_config)
     volume = VolumeControl(resolved_volume, default_percent=default_volume)
-    apply_pipewire_volume(volume.get())
+    apply_pipewire_volume(effective_output_volume(volume.get(), max_output_volume))
     amp_gate = create_amp_gate(amp_sd_gpio)
     audio_player = AudioPlayer(
         command=audio_command,
         dry_run=dry_run_audio,
         volume_getter=volume.get,
+        max_output_percent=max_output_volume,
         amp_gate=amp_gate,
         amp_unmute_delay=amp_unmute_delay,
         amp_mute_delay=amp_mute_delay,
@@ -207,6 +224,7 @@ def create_app(
     )
     trigger_file = trigger_file_from_env()
     bluetooth = bluetooth_controller or BluetoothController()
+    wifi = wifi_controller or WifiController()
     mode = mode_controller or ServiceModeController()
     reader_state = ReaderState(nfc_backend)
     reader_lock = threading.Lock()
@@ -319,8 +337,7 @@ def create_app(
                 404,
             )
 
-    @app.get("/")
-    def index() -> str:
+    def render_admin_dashboard() -> str:
         characters = _load_characters(resolved_config)
         return render_template(
             "admin.html",
@@ -340,7 +357,44 @@ def create_app(
             last_tag=_last_tag_view(resolved_state, resolved_config),
             recent_events=_event_views(resolved_state),
             bluetooth_status=bluetooth.status().to_dict(),
+            wifi_status=wifi.status().to_dict(),
             mode_status=mode.status().to_dict(),
+        )
+
+    def recovery_page_enabled_for_request() -> bool:
+        if _env_flag("MAGIC_BOX_RECOVERY_PAGE") or _env_flag("MAGIC_BOX_FORCE_RECOVERY_PAGE"):
+            return True
+        host = request.host.split(":", 1)[0].strip().lower()
+        recovery_hosts = os.getenv("MAGIC_BOX_RECOVERY_HOSTS", DEFAULT_RECOVERY_HOSTS)
+        return host in {item.strip().lower() for item in recovery_hosts.split(",") if item.strip()}
+
+    def captive_portal_probe():
+        return redirect(url_for("reconnect"), code=302)
+
+    for probe_path in CAPTIVE_PORTAL_PROBE_PATHS:
+        app.add_url_rule(
+            probe_path,
+            endpoint="captive_portal_probe_" + probe_path.strip("/").replace("/", "_").replace(".", "_"),
+            view_func=captive_portal_probe,
+            methods=["GET"],
+        )
+
+    @app.get("/")
+    def index():
+        if recovery_page_enabled_for_request() and request.args.get("advanced") not in {"1", "true", "yes"}:
+            return redirect(url_for("reconnect"))
+        return render_admin_dashboard()
+
+    @app.get("/admin")
+    def admin_dashboard() -> str:
+        return render_admin_dashboard()
+
+    @app.get("/reconnect")
+    def reconnect() -> str:
+        return render_template(
+            "reconnect.html",
+            wifi_status=wifi.status().to_dict(),
+            owner_url=os.getenv("STORY_DOCK_OWNER_URL", "https://tap.getstorydock.com/owner?tab=dock"),
         )
 
     @app.post("/characters")
@@ -896,7 +950,7 @@ def create_app(
                 return redirect(url_for("index"))
             value = volume.set(requested)
 
-        if apply_pipewire_volume(value):
+        if apply_pipewire_volume(effective_output_volume(value, max_output_volume)):
             flash(f"Volume set to {value}%.", "success")
         else:
             flash(f"Volume set to {value}% for app playback.", "success")
@@ -1076,6 +1130,24 @@ def create_app(
 
         return jsonify(result.to_dict()), 200 if result.ok else 503
 
+    @app.get("/api/wifi/status")
+    def wifi_status():
+        return jsonify({"ok": True, **wifi.status().to_dict()})
+
+    @app.post("/api/wifi/scan")
+    def wifi_scan():
+        result = wifi.scan()
+        return jsonify(result.to_dict()), 200 if result.ok else 503
+
+    @app.post("/api/wifi/connect")
+    def wifi_connect():
+        payload = _request_data()
+        try:
+            result = wifi.connect(str(payload.get("ssid", "")), str(payload.get("password", "")))
+        except ValueError as exc:
+            return jsonify({"ok": False, "message": str(exc), **wifi.status().to_dict()}), 400
+        return jsonify(result.to_dict()), 200 if result.ok else 503
+
     return app
 
 
@@ -1111,6 +1183,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--default-volume",
         type=int,
         default=int(os.getenv("MAGIC_BOX_DEFAULT_VOLUME", str(DEFAULT_VOLUME_PERCENT))),
+    )
+    parser.add_argument(
+        "--max-output-volume",
+        type=int,
+        default=int(os.getenv("MAGIC_BOX_MAX_OUTPUT_VOLUME", str(DEFAULT_MAX_OUTPUT_VOLUME_PERCENT))),
     )
     parser.add_argument("--amp-sd-gpio", type=int, default=_optional_int(os.getenv("MAGIC_BOX_AMP_SD_GPIO")))
     parser.add_argument(
@@ -1166,6 +1243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_file=args.state_file,
         guest_only=args.guest_only,
         default_volume=args.default_volume,
+        max_output_volume=args.max_output_volume,
         amp_sd_gpio=args.amp_sd_gpio,
         amp_unmute_delay=args.amp_unmute_delay,
         amp_mute_delay=args.amp_mute_delay,

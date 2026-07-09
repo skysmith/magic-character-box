@@ -126,7 +126,7 @@ sudo raspi-config
 
 Choose `Interface Options` -> `SPI` -> enable, then reboot.
 
-For the MAX98357A speaker, follow `docs/wiring.md`; the app itself just plays through the system default audio device, so once the Pi routes ALSA audio to the I2S amp, `mpg123` works the same way.
+For the MAX98357A speaker, follow `docs/wiring.md`; the Pi service files pin playback to the direct `plughw:CARD=MAX98357A,DEV=0` ALSA path so the built-in speaker behaves consistently across cards.
 
 For a wiring cheat sheet and reserved-pin ledger, use [docs/pi-zero-2w-pin-map.md](docs/pi-zero-2w-pin-map.md). The same reservations are available as JSON in [config/pin-reservations.json](config/pin-reservations.json).
 
@@ -141,7 +141,7 @@ python -m magic_box.app --nfc pn532
 You can also use environment variables:
 
 ```bash
-MAGIC_BOX_NFC=pn532 MAGIC_BOX_AUDIO_CMD="mpg123 -q" python -m magic_box.app
+MAGIC_BOX_NFC=pn532 MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" python -m magic_box.app
 ```
 
 ## Scan A Tag
@@ -211,6 +211,7 @@ The admin UI can:
 - Serve a first mobile API for future native iPhone/App Clip work at `/api/mobile/story-stickers/<token>`.
 - Point Story Sticker links at a hosted/tunneled URL with `MAGIC_BOX_PUBLIC_STORY_BASE_URL` during staging.
 - Switch between setup scanning and kid playback mode from the dashboard.
+- Check Wi-Fi status, scan nearby networks, and connect through the local NetworkManager controls on the Pi.
 - Use the last-seen tag to teach a new character without copying a UID.
 - Run a one-click box test from the hidden tools drawer.
 - Download a backup zip of `config/` and `audio/`.

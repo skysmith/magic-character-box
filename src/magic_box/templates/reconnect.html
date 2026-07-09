@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Reconnect Story Dock</title>
+    <link rel="icon" href="{{ url_for('static', filename='story-dock-app-icon-192.png') }}" type="image/png">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='story-dock-app-icon-192.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
+  </head>
+  <body class="reconnect-body">
+    <main class="reconnect-page">
+      <section class="reconnect-card wifi-section" data-wifi-panel aria-labelledby="reconnect-title">
+        <header class="reconnect-header">
+          <div class="reconnect-brand-lockup" aria-label="Story Dock">
+            <img src="{{ url_for('static', filename='story-dock-logo.svg') }}" alt="">
+            <span aria-hidden="true">Story Dock</span>
+          </div>
+          <span class="reconnect-mode-status" aria-label="Device status: setup mode">
+            <span class="reconnect-status-dot" aria-hidden="true"></span>
+            <span aria-hidden="true">Status</span>
+            <strong aria-hidden="true">Setup mode</strong>
+          </span>
+        </header>
+
+        <div class="reconnect-copy">
+          <p class="label">Wi-Fi recovery</p>
+          <h1 id="reconnect-title">Let's reconnect your Story Dock.</h1>
+          <p class="reconnect-lede">
+            Choose Wi-Fi and the dock will take it from here. Your stories and stickers stay saved.
+          </p>
+        </div>
+
+        <div class="reconnect-status-strip" aria-label="Current Wi-Fi status">
+          <div>
+            <p class="label">Network</p>
+            <p class="status-value" data-wifi-ssid>{{ wifi_status.ssid or "setup mode" }}</p>
+          </div>
+          <p class="muted" data-wifi-message>{{ wifi_status.message }}</p>
+          <span class="visually-hidden" data-wifi-adapter>{{ "on" if wifi_status.powered else "off" if wifi_status.available else "unavailable" }}</span>
+          <span class="visually-hidden" data-wifi-device>{{ wifi_status.device or "No Wi-Fi device found." }}</span>
+          <span class="visually-hidden" data-wifi-count>{{ wifi_status.networks|length }}</span>
+        </div>
+
+        <div class="reconnect-actions">
+          <button class="button" type="button" data-wifi-scan {% if not wifi_status.available %}disabled{% endif %}>Find Wi-Fi</button>
+          <button class="button button-secondary" type="button" data-wifi-refresh>Refresh</button>
+        </div>
+
+        <form class="reconnect-form" data-wifi-connect>
+          <label>
+            <span class="field-label">Wi-Fi network</span>
+            <input
+              name="ssid"
+              list="wifi-network-options"
+              autocomplete="off"
+              placeholder="Home Wi-Fi"
+              required
+              data-wifi-ssid-input
+            >
+            <datalist id="wifi-network-options" data-wifi-options>
+              {% for network in wifi_status.networks %}
+                <option value="{{ network.ssid }}"></option>
+              {% endfor %}
+            </datalist>
+          </label>
+          <label>
+            <span class="field-label">Password</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="Wi-Fi password" data-wifi-password-input>
+          </label>
+          <button class="button reconnect-submit" type="submit" {% if not wifi_status.available %}disabled{% endif %} data-wifi-connect-button>
+            Reconnect Story Dock
+          </button>
+        </form>
+
+        <div class="reconnect-success" data-reconnect-success hidden>
+          <strong>Story Dock is switching networks.</strong>
+          <span>If this page stops loading, setup usually worked. Rejoin your normal Wi-Fi and open Library.</span>
+          <a class="text-link" href="{{ owner_url }}">Open Library</a>
+        </div>
+
+        <p class="muted wifi-action-status" data-wifi-status role="status" aria-live="polite">
+          Find your Wi-Fi network, or type its name.
+        </p>
+
+        <div class="wifi-network-list reconnect-network-list" data-wifi-networks>
+          {% for network in wifi_status.networks %}
+            <article class="wifi-network" data-wifi-network-ssid="{{ network.ssid }}">
+              <div>
+                <h3>{{ network.ssid }}</h3>
+                <p class="muted">{{ network.signal or "unknown" }}% signal{% if network.security %} · {{ network.security }}{% endif %}</p>
+                <p class="tag-list">
+                  {% if network.active %}<span>connected</span>{% endif %}
+                </p>
+              </div>
+              <button class="button button-secondary" type="button" data-wifi-use-network>Choose</button>
+            </article>
+          {% else %}
+            <p class="empty-state">No networks listed yet. Tap Find Wi-Fi.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <details class="reconnect-advanced">
+        <summary>Support tools</summary>
+        <div>
+          <p class="muted">Open the full local dashboard for testing sounds, pairing tags, or checking device details.</p>
+          <a class="button button-secondary" href="{{ url_for('admin_dashboard') }}">Open full admin</a>
+        </div>
+      </details>
+    </main>
+
+    <script src="{{ url_for('static', filename='admin.js') }}"></script>
+  </body>
+</html>

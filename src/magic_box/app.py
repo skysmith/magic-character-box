@@ -179,6 +179,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         LOGGER.error("%s", exc)
         return 2
+    config_mtime = _config_mtime(config.path)
 
     try:
         reader = create_reader(args.nfc)
@@ -214,6 +215,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         while True:
+            config, config_mtime, config_reloaded = _reload_config_if_changed(config_path, config, config_mtime)
+            if config_reloaded:
+                LOGGER.info("Reloaded character config after sync update")
+
             if consume_stop_request(control_path):
                 LOGGER.info("Admin stop audio requested")
                 player.stop_current()
@@ -253,7 +258,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             LOGGER.info("Playing %s (%s)", character.name, character.uid)
             _safe_record_tag(state_path, uid, known=True, character_name=character.name, source="playback")
             _safe_append_event(state_path, "audio", f"{character.name} played.", uid=uid, character_name=character.name)
-            player.stop_current()
             if player.play_folder(character.folder, character.mode):
                 tag_state.note_audio_started(uid)
     except KeyboardInterrupt:
@@ -319,6 +323,29 @@ def _play_system_sound(player: AudioPlayer, path: Path | None, label: str) -> bo
         return False
     player.stop_current()
     return player.play_file(path)
+
+
+def _config_mtime(path: Path) -> float | None:
+    try:
+        return path.expanduser().resolve().stat().st_mtime
+    except OSError:
+        return None
+
+
+def _reload_config_if_changed(
+    config_path: Path,
+    current_config: CharacterConfig,
+    last_mtime: float | None,
+) -> tuple[CharacterConfig, float | None, bool]:
+    current_mtime = _config_mtime(config_path)
+    if current_mtime is None or current_mtime == last_mtime:
+        return current_config, last_mtime, False
+
+    try:
+        return CharacterConfig.load(config_path), current_mtime, True
+    except ConfigError as exc:
+        LOGGER.warning("Could not reload changed character config: %s", exc)
+        return current_config, current_mtime, False
 
 
 def _safe_record_tag(

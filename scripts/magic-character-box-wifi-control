@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Narrow NetworkManager helper for the local web-admin Wi-Fi setup flow."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run approved NetworkManager Wi-Fi actions.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("radio-status")
+    subparsers.add_parser("radio-on")
+    subparsers.add_parser("device-status")
+    subparsers.add_parser("rescan")
+    subparsers.add_parser("list")
+    connect = subparsers.add_parser("connect")
+    connect.add_argument("ssid")
+    connect.add_argument("password", nargs="?", default="")
+
+    args = parser.parse_args()
+    nmcli = shutil.which("nmcli") or "/usr/bin/nmcli"
+    if not os.path.exists(nmcli):
+        print("NetworkManager nmcli is not installed.", file=sys.stderr)
+        return 127
+
+    if args.command == "radio-status":
+        return run(nmcli, "radio", "wifi")
+    if args.command == "radio-on":
+        return run(nmcli, "radio", "wifi", "on")
+    if args.command == "device-status":
+        return run(nmcli, "-t", "--escape", "yes", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status")
+    if args.command == "rescan":
+        return run(nmcli, "device", "wifi", "rescan")
+    if args.command == "list":
+        return run(nmcli, "-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list")
+    if args.command == "connect":
+        ssid = validate_value(args.ssid, "Wi-Fi network name")
+        password = validate_value(args.password, "Wi-Fi password")
+        command = [nmcli, "device", "wifi", "connect", ssid]
+        if password:
+            command.extend(["password", password])
+        return run_command(command)
+
+    return 2
+
+
+def validate_value(value: str, label: str) -> str:
+    if any(char in value for char in "\x00\n\r"):
+        raise SystemExit(f"{label} contains unsupported characters.")
+    return value
+
+
+def run(nmcli: str, *args: str) -> int:
+    return run_command([nmcli, *args])
+
+
+def run_command(command: list[str]) -> int:
+    completed = subprocess.run(command, check=False)
+    return completed.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -14,6 +14,7 @@ from magic_box.guest_links import create_guest_link, load_guest_links
 from magic_box.runtime_state import load_state, record_tag, state_file_for_config
 from magic_box.story_stickers import create_story_sticker, load_story_stickers, story_stickers_file_for_config
 from magic_box.system_mode import ModeActionResult, ModeStatus
+from magic_box.wifi import WifiActionResult, WifiNetwork, WifiStatus
 
 
 class AdminTests(unittest.TestCase):
@@ -31,8 +32,95 @@ class AdminTests(unittest.TestCase):
             self.assertIn(b"Teach a character", response.data)
             self.assertIn(b"Last seen tag", response.data)
             self.assertIn(b"Box tools", response.data)
+            self.assertIn(b"Wi-Fi", response.data)
             self.assertIn(b"Bluetooth experiments", response.data)
             self.assertIn(b"Setup scan", response.data)
+
+    def test_recovery_host_redirects_to_reconnect_page(self) -> None:
+        with _temp_project() as root:
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=_FakeWifiController(),
+            )
+            client = app.test_client()
+
+            response = client.get("/", base_url="http://10.42.0.1:8080")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].endswith("/reconnect"))
+
+    def test_recovery_setup_hostname_redirects_to_reconnect_page(self) -> None:
+        with _temp_project() as root:
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=_FakeWifiController(),
+            )
+            client = app.test_client()
+
+            response = client.get("/", base_url="http://storydock.setup")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].endswith("/reconnect"))
+
+    def test_captive_portal_probe_urls_open_reconnect_page(self) -> None:
+        with _temp_project() as root:
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=_FakeWifiController(),
+            )
+            client = app.test_client()
+
+            for path in ("/hotspot-detect.html", "/generate_204", "/connecttest.txt", "/ncsi.txt"):
+                with self.subTest(path=path):
+                    response = client.get(path, base_url="http://captive.apple.com")
+
+                    self.assertEqual(response.status_code, 302)
+                    self.assertTrue(response.headers["Location"].endswith("/reconnect"))
+
+    def test_reconnect_page_is_simple_wifi_recovery_flow(self) -> None:
+        with _temp_project() as root:
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=_FakeWifiController(),
+            )
+            client = app.test_client()
+
+            response = client.get("/reconnect")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Let's reconnect your Story Dock.", response.data)
+            self.assertIn(b"Find Wi-Fi", response.data)
+            self.assertIn(b"Reconnect Story Dock", response.data)
+            self.assertIn(b"story-dock-logo.svg", response.data)
+            self.assertIn(b"story-dock-app-icon-192.png", response.data)
+            self.assertIn(b"Device status: setup mode", response.data)
+            self.assertIn(b"Open full admin", response.data)
+            self.assertIn(b"Your stories and stickers stay saved.", response.data)
+            self.assertNotIn(b"favicon.svg", response.data)
+            self.assertNotIn(b"I've got you", response.data)
+            self.assertNotIn(b"Photo stories", response.data)
+            self.assertNotIn(b"Teach character", response.data)
+            self.assertNotIn(b"Bluetooth experiments", response.data)
+
+    def test_full_admin_still_available_from_recovery_page(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/admin", base_url="http://10.42.0.1:8080")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Magic Character Box", response.data)
+            self.assertIn(b"Photo stories", response.data)
+            self.assertIn(b"Bluetooth experiments", response.data)
 
     def test_index_renders_last_seen_tag(self) -> None:
         with _temp_project() as root:
@@ -674,6 +762,45 @@ class AdminTests(unittest.TestCase):
             self.assertTrue(payload["available"])
             self.assertEqual(payload["devices"][0]["name"], "Sony Speaker")
 
+    def test_wifi_status_endpoint_returns_redacted_network_state(self) -> None:
+        with _temp_project() as root:
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=_FakeWifiController(),
+            )
+            client = app.test_client()
+
+            response = client.get("/api/wifi/status")
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["available"])
+            self.assertEqual(payload["ssid"], "Cottage")
+            self.assertNotIn("password", json.dumps(payload).lower())
+
+    def test_wifi_connect_endpoint_sends_credentials_to_controller_only(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            response = client.post("/api/wifi/connect", json={"ssid": "Mini Cottage", "password": "private pass"})
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+            self.assertEqual(wifi.connect_calls, [("Mini Cottage", "private pass")])
+            self.assertNotIn("private pass", json.dumps(payload))
+
     def test_bluetooth_device_action_validates_action(self) -> None:
         with _temp_project() as root:
             app = create_app(
@@ -879,6 +1006,55 @@ class _FakeBluetoothController:
 
     def use_for_audio(self, address: str) -> BluetoothActionResult:
         return BluetoothActionResult(ok=True, message="Selected Sony Speaker.", status=self.status())
+
+
+class _FakeWifiController:
+    def __init__(self) -> None:
+        self.connect_calls: list[tuple[str, str]] = []
+
+    def status(self) -> WifiStatus:
+        return WifiStatus(
+            available=True,
+            message="Connected to Cottage.",
+            powered=True,
+            connected=True,
+            ssid="Cottage",
+            device="wlan0",
+            networks=(),
+        )
+
+    def scan(self) -> WifiActionResult:
+        return WifiActionResult(
+            ok=True,
+            message="Wi-Fi scan complete.",
+            status=WifiStatus(
+                available=True,
+                message="Wi-Fi scan complete.",
+                powered=True,
+                connected=True,
+                ssid="Cottage",
+                device="wlan0",
+                networks=(
+                    WifiNetwork(ssid="Cottage", signal=88, security="WPA2", active=True),
+                    WifiNetwork(ssid="Mini Cottage", signal=74, security="WPA2"),
+                ),
+            ),
+        )
+
+    def connect(self, ssid: str, password: str = "") -> WifiActionResult:
+        self.connect_calls.append((ssid, password))
+        return WifiActionResult(
+            ok=True,
+            message=f"Connected to {ssid}.",
+            status=WifiStatus(
+                available=True,
+                message=f"Connected to {ssid}.",
+                powered=True,
+                connected=True,
+                ssid=ssid,
+                device="wlan0",
+            ),
+        )
 
 
 class _FakeModeController:

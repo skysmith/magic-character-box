@@ -68,6 +68,7 @@
         <a href="#characters">Characters</a>
         <a href="#program">Teach character</a>
         <a href="#guest-links">Guest links</a>
+        <a href="#wifi">Wi-Fi</a>
         <a href="#bluetooth">Bluetooth</a>
         <a href="#details">Device details</a>
       </nav>
@@ -438,6 +439,75 @@
         </div>
       </section>
 
+      <section id="wifi" class="section wifi-section" data-wifi-panel>
+        <div class="section-heading">
+          <div>
+            <p class="label">Network</p>
+            <h2>Wi-Fi</h2>
+          </div>
+          <p class="section-note">Local NetworkManager controls for setup and repair.</p>
+        </div>
+
+        <div class="wifi-toolbar">
+          <button class="button button-secondary" type="button" data-wifi-refresh>Refresh</button>
+          <button class="button button-secondary" type="button" data-wifi-scan {% if not wifi_status.available %}disabled{% endif %}>Scan</button>
+        </div>
+
+        <div class="status-grid wifi-status-grid" aria-label="Wi-Fi status">
+          <div>
+            <p class="label">Adapter</p>
+            <p class="status-value" data-wifi-adapter>{{ "on" if wifi_status.powered else "off" if wifi_status.available else "unavailable" }}</p>
+            <p class="muted" data-wifi-message>{{ wifi_status.message }}</p>
+          </div>
+          <div>
+            <p class="label">Connection</p>
+            <p class="status-value" data-wifi-ssid>{{ wifi_status.ssid or "not connected" }}</p>
+            <p class="muted" data-wifi-device>{{ wifi_status.device or "No Wi-Fi device found." }}</p>
+          </div>
+          <div>
+            <p class="label">Networks</p>
+            <p class="status-value" data-wifi-count>{{ wifi_status.networks|length }}</p>
+            <p class="muted">Scan to choose a nearby network.</p>
+          </div>
+        </div>
+
+        <form class="wifi-connect-form" data-wifi-connect>
+          <label>
+            <span class="field-label">Network name</span>
+            <input name="ssid" list="wifi-network-options" autocomplete="off" required data-wifi-ssid-input>
+            <datalist id="wifi-network-options" data-wifi-options>
+              {% for network in wifi_status.networks %}
+                <option value="{{ network.ssid }}"></option>
+              {% endfor %}
+            </datalist>
+          </label>
+          <label>
+            <span class="field-label">Password</span>
+            <input name="password" type="password" autocomplete="current-password" data-wifi-password-input>
+          </label>
+          <button class="button" type="submit" {% if not wifi_status.available %}disabled{% endif %} data-wifi-connect-button>Connect</button>
+        </form>
+
+        <p class="muted wifi-action-status" data-wifi-status role="status" aria-live="polite"></p>
+
+        <div class="wifi-network-list" data-wifi-networks>
+          {% for network in wifi_status.networks %}
+            <article class="wifi-network" data-wifi-network-ssid="{{ network.ssid }}">
+              <div>
+                <h3>{{ network.ssid }}</h3>
+                <p class="muted">{{ network.signal or "unknown" }}% signal{% if network.security %} · {{ network.security }}{% endif %}</p>
+                <p class="tag-list">
+                  {% if network.active %}<span>connected</span>{% endif %}
+                </p>
+              </div>
+              <button class="button button-secondary" type="button" data-wifi-use-network>Use</button>
+            </article>
+          {% else %}
+            <p class="empty-state">Scan to list nearby Wi-Fi networks.</p>
+          {% endfor %}
+        </div>
+      </section>
+
       <section id="bluetooth" class="section bluetooth-section" data-bluetooth-panel>
         <div class="section-heading">
           <div>
@@ -464,7 +534,7 @@
           <div>
             <p class="label">Default output</p>
             <p class="status-value" data-bluetooth-output>{{ bluetooth_status.default_sink or "unknown" }}</p>
-            <p class="muted">Playback follows the Pi's default Pulse/PipeWire output.</p>
+            <p class="muted">Used only if playback is overridden to Pulse/PipeWire.</p>
           </div>
           <div>
             <p class="label">Scan state</p>

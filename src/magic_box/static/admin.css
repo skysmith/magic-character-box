@@ -17,6 +17,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: #ffffff;
@@ -36,6 +40,234 @@ select {
 main {
   width: min(1120px, calc(100% - 32px));
   margin: 0 auto;
+}
+
+.reconnect-body {
+  --bg-canvas: #f8f8f7;
+  --bg-surface: #fffdf9;
+  --bg-subtle: #f4f4f1;
+  --border-subtle: #deded9;
+  --border-strong: #cfcfc8;
+  --text-primary: #171b20;
+  --text-secondary: #3f464c;
+  --text-muted: #6c716d;
+  --state-active: #2563eb;
+  min-height: 100vh;
+  min-height: 100svh;
+  background:
+    radial-gradient(circle at 20% 6%, rgb(255 255 255 / 88%), transparent 34%),
+    linear-gradient(140deg, #ffffff 0%, var(--bg-canvas) 60%, #f0f0ed 100%);
+}
+
+.reconnect-page {
+  align-content: start;
+  display: grid;
+  gap: 14px;
+  margin: 0 auto;
+  min-height: 100vh;
+  min-height: 100svh;
+  padding: 34px 0;
+  width: min(560px, calc(100% - 28px));
+}
+
+.reconnect-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  box-shadow: 0 18px 56px rgb(53 43 31 / 7%);
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+  padding: 38px;
+  width: 100%;
+}
+
+.reconnect-header {
+  align-items: start;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.reconnect-brand-lockup {
+  align-items: center;
+  color: var(--text-primary);
+  display: inline-flex;
+  gap: 9px;
+  font-size: 0.95rem;
+  font-weight: 850;
+  line-height: 1;
+  min-width: 0;
+}
+
+.reconnect-brand-lockup img {
+  display: block;
+  flex: 0 0 auto;
+  height: 25px;
+  object-fit: contain;
+  width: 25px;
+}
+
+.reconnect-mode-status {
+  align-items: center;
+  color: var(--text-secondary);
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 7px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+  padding-top: 4px;
+  text-transform: uppercase;
+}
+
+.reconnect-mode-status strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 820;
+  text-transform: none;
+}
+
+.reconnect-status-dot {
+  background: var(--state-active);
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgb(37 99 235 / 10%);
+  display: block;
+  height: 7px;
+  width: 7px;
+}
+
+.reconnect-copy {
+  display: grid;
+  gap: 8px;
+}
+
+.reconnect-copy h1 {
+  font-size: 3.15rem;
+  font-weight: 820;
+  letter-spacing: 0;
+  line-height: 0.98;
+  max-width: 9em;
+  overflow-wrap: anywhere;
+}
+
+.reconnect-lede {
+  color: var(--text-secondary);
+  font-size: 1.08rem;
+  max-width: 31em;
+  overflow-wrap: anywhere;
+}
+
+.reconnect-panel {
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 26px 0 30px;
+}
+
+.reconnect-status-strip {
+  border-bottom: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(135px, 0.62fr) minmax(0, 1fr);
+  padding: 12px 0;
+}
+
+.reconnect-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.reconnect-actions .button {
+  flex: 1 1 150px;
+}
+
+.reconnect-form {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr;
+}
+
+.reconnect-submit {
+  width: 100%;
+}
+
+.reconnect-success {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius);
+  color: var(--state-positive);
+  display: grid;
+  gap: 3px;
+  padding: 12px;
+}
+
+.reconnect-success[hidden] {
+  display: none;
+}
+
+.reconnect-success span {
+  color: var(--text-secondary);
+}
+
+.reconnect-network-list {
+  margin-top: 0;
+}
+
+.reconnect-advanced {
+  background: rgb(255 253 249 / 72%);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.reconnect-advanced summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.reconnect-advanced > div {
+  border-top: 1px solid var(--border-subtle);
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 14px;
+}
+
+.reconnect-page input {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+  border-radius: 10px;
+  min-height: 50px;
+}
+
+.reconnect-page input:focus {
+  border-color: #166534;
+  outline: 3px solid rgb(102 124 103 / 16%);
+}
+
+.reconnect-page .button {
+  border-radius: 10px;
+  box-shadow: 0 12px 24px rgb(23 27 32 / 12%);
+  min-height: 50px;
+}
+
+.reconnect-page .button-secondary {
+  background: #ffffff;
+  border-color: var(--border-subtle);
+  box-shadow: none;
+}
+
+.reconnect-page .button:hover,
+.reconnect-page .text-link:hover {
+  transform: translateY(-1px);
+}
+
+.reconnect-page .button:active,
+.reconnect-page .text-link:active {
+  transform: translateY(0);
 }
 
 .site-header {
@@ -969,35 +1201,48 @@ summary {
   padding-top: 18px;
 }
 
-.bluetooth-toolbar {
+.bluetooth-toolbar,
+.wifi-toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   margin-bottom: 18px;
 }
 
-.bluetooth-status-grid {
+.bluetooth-status-grid,
+.wifi-status-grid {
   border-top: 1px solid var(--border-subtle);
 }
 
-.bluetooth-action-status {
+.bluetooth-action-status,
+.wifi-action-status {
   min-height: 24px;
   margin-top: 14px;
 }
 
-.bluetooth-device-list {
+.bluetooth-device-list,
+.wifi-network-list {
   display: grid;
   gap: 12px;
   margin-top: 10px;
 }
 
-.bluetooth-device {
+.bluetooth-device,
+.wifi-network {
   align-items: center;
   border-top: 1px solid var(--border-subtle);
   display: grid;
   gap: 16px;
   grid-template-columns: minmax(0, 1fr) auto;
   padding: 16px 0;
+}
+
+.wifi-connect-form {
+  align-items: end;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  margin-top: 18px;
 }
 
 .bluetooth-device-actions {
@@ -1027,7 +1272,11 @@ summary {
   .status-grid,
   .section-split,
   .character-row,
-  .bluetooth-device {
+  .bluetooth-device,
+  .reconnect-form,
+  .reconnect-status-strip,
+  .wifi-connect-form,
+  .wifi-network {
     grid-template-columns: 1fr;
   }
 
@@ -1053,6 +1302,37 @@ summary {
 
   .scan-line {
     grid-template-columns: 1fr;
+  }
+
+  .reconnect-page {
+    padding: 18px 0;
+    width: min(100% - 22px, 560px);
+  }
+
+  .reconnect-card {
+    gap: 18px;
+    padding: 24px;
+  }
+
+  .reconnect-header {
+    align-items: start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    justify-content: space-between;
+  }
+
+  .reconnect-copy h1 {
+    font-size: 2.35rem;
+  }
+
+  .reconnect-lede {
+    font-size: 1rem;
+  }
+
+  .reconnect-actions .button,
+  .reconnect-form .button {
+    width: 100%;
   }
 
   .last-tag-card {
