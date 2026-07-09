@@ -12,6 +12,7 @@ import time
 from typing import Callable, Iterable
 
 from .amp import AmpGate, NoopAmpGate
+from .volume import DEFAULT_MAX_OUTPUT_VOLUME_PERCENT, effective_output_volume
 
 
 LOGGER = logging.getLogger(__name__)
@@ -34,11 +35,13 @@ class AudioPlayer:
         use_mpg123_remote: bool = False,
         warmup_file: Path | None = None,
         use_remote_volume: bool | None = None,
+        max_output_percent: int = DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
     ) -> None:
         self.command = command
         self.dry_run = dry_run
         self.extensions = {extension.lower() for extension in extensions}
         self.volume_getter = volume_getter
+        self.max_output_percent = max_output_percent
         self.amp_gate = amp_gate or NoopAmpGate()
         self.amp_unmute_delay = max(amp_unmute_delay, 0)
         self.amp_mute_delay = max(amp_mute_delay, 0)
@@ -100,7 +103,7 @@ class AudioPlayer:
         self.stop_current()
         args = shlex.split(self.command)
         if self.volume_getter is not None:
-            args = _apply_mpg123_volume(args, self.volume_getter())
+            args = _apply_mpg123_volume(args, self.volume_getter(), self.max_output_percent)
         args.append(str(path))
         try:
             if self.mute_between_tracks:
@@ -212,8 +215,8 @@ class AudioPlayer:
 
     def _volume_percent(self) -> float:
         if self.volume_getter is None:
-            return 100.0
-        return float(min(max(self.volume_getter(), 0), 100))
+            return float(min(max(self.max_output_percent, 0), 100))
+        return effective_output_volume(self.volume_getter(), self.max_output_percent)
 
     def _start_remote(self) -> bool:
         with self._lock:
@@ -303,11 +306,15 @@ class AudioPlayer:
         thread.start()
 
 
-def _apply_mpg123_volume(args: list[str], volume_percent: int) -> list[str]:
+def _apply_mpg123_volume(
+    args: list[str],
+    volume_percent: int,
+    max_output_percent: int = DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
+) -> list[str]:
     if not args or Path(args[0]).name != "mpg123":
         return args
 
-    scale = _mpg123_scalefactor(volume_percent)
+    scale = _mpg123_scalefactor(effective_output_volume(volume_percent, max_output_percent))
     cleaned: list[str] = []
     index = 0
     while index < len(args):
@@ -364,6 +371,6 @@ def _mpg123_status_is_playing(line: str) -> bool | None:
     return parts[1] == "2"
 
 
-def _mpg123_scalefactor(volume_percent: int) -> int:
+def _mpg123_scalefactor(volume_percent: float) -> int:
     percent = min(max(volume_percent, 0), 100)
     return round(32768 * (percent / 100))

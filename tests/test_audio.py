@@ -48,6 +48,12 @@ class AudioTests(unittest.TestCase):
             ["mpg123", "-q", "-f", "8192"],
         )
 
+    def test_mpg123_volume_honors_max_output_ceiling(self) -> None:
+        self.assertEqual(
+            _apply_mpg123_volume(["mpg123", "-q"], 100, 75),
+            ["mpg123", "-q", "-f", "24576"],
+        )
+
     def test_remote_args_keep_player_open_and_remove_scalefactor(self) -> None:
         self.assertEqual(
             _build_mpg123_remote_args(["mpg123", "-q", "-o", "pulse", "-f", "1000"]),

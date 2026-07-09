@@ -13,6 +13,7 @@ import tempfile
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_VOLUME_PERCENT = 50
+DEFAULT_MAX_OUTPUT_VOLUME_PERCENT = 100
 MIN_VOLUME_PERCENT = 0
 MAX_VOLUME_PERCENT = 100
 VOLUME_STEP_PERCENT = 10
@@ -67,14 +68,20 @@ def clamp_volume(percent: int) -> int:
     return min(max(percent, MIN_VOLUME_PERCENT), MAX_VOLUME_PERCENT)
 
 
-def apply_pipewire_volume(percent: int, target: str = "@DEFAULT_AUDIO_SINK@") -> bool:
+def effective_output_volume(volume_percent: int, max_output_percent: int = DEFAULT_MAX_OUTPUT_VOLUME_PERCENT) -> float:
+    """Map user-facing volume through a speaker/amp-specific output ceiling."""
+
+    return clamp_volume(volume_percent) * (clamp_volume(max_output_percent) / 100)
+
+
+def apply_pipewire_volume(percent: float, target: str = "@DEFAULT_AUDIO_SINK@") -> bool:
     """Apply volume to the PipeWire default sink when wpctl is available."""
 
     command = shutil.which("wpctl")
     if command is None:
         return False
 
-    value = clamp_volume(percent) / 100
+    value = min(max(percent, MIN_VOLUME_PERCENT), MAX_VOLUME_PERCENT) / 100
     env = os.environ.copy()
     env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     completed = subprocess.run(

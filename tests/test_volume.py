@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-from magic_box.volume import VolumeControl, apply_pipewire_volume
+from magic_box.volume import VolumeControl, apply_pipewire_volume, effective_output_volume
 
 
 class VolumeTests(unittest.TestCase):
@@ -29,6 +29,11 @@ class VolumeTests(unittest.TestCase):
         args = run.call_args.args[0]
         self.assertEqual(args[:3], ["/usr/bin/wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@"])
         self.assertEqual(args[3], "0.650")
+
+    def test_effective_output_volume_applies_speaker_ceiling(self) -> None:
+        self.assertEqual(effective_output_volume(100, 75), 75)
+        self.assertEqual(effective_output_volume(60, 75), 45)
+        self.assertEqual(effective_output_volume(200, 75), 75)
 
 
 if __name__ == "__main__":

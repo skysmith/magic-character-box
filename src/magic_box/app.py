@@ -16,7 +16,14 @@ from .config import CharacterConfig, ConfigError, project_root_for_config
 from .control import consume_stop_request, control_file_for_config
 from .nfc import NFCError, StopRequested, create_reader
 from .runtime_state import append_event, record_tag, state_file_for_config
-from .volume import DEFAULT_VOLUME_PERCENT, VolumeControl, apply_pipewire_volume, volume_file_for_config
+from .volume import (
+    DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
+    DEFAULT_VOLUME_PERCENT,
+    VolumeControl,
+    apply_pipewire_volume,
+    effective_output_volume,
+    volume_file_for_config,
+)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -104,6 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Default software volume percentage when no volume file exists.",
     )
     parser.add_argument(
+        "--max-output-volume",
+        type=int,
+        default=int(os.getenv("MAGIC_BOX_MAX_OUTPUT_VOLUME", str(DEFAULT_MAX_OUTPUT_VOLUME_PERCENT))),
+        help="Maximum output volume percentage after applying the user-facing volume.",
+    )
+    parser.add_argument(
         "--amp-sd-gpio",
         type=int,
         default=_optional_int(os.getenv("MAGIC_BOX_AMP_SD_GPIO")),
@@ -179,12 +192,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     startup_sound = _resolve_optional_audio_path(config_path, args.startup_sound)
     unknown_sound = _resolve_optional_audio_path(config_path, args.unknown_sound)
     volume = VolumeControl(volume_path, default_percent=args.default_volume)
-    apply_pipewire_volume(volume.get())
+    apply_pipewire_volume(effective_output_volume(volume.get(), args.max_output_volume))
     amp_gate = create_amp_gate(args.amp_sd_gpio)
     player = AudioPlayer(
         command=args.audio_command,
         dry_run=args.dry_run_audio,
         volume_getter=volume.get,
+        max_output_percent=args.max_output_volume,
         amp_gate=amp_gate,
         amp_unmute_delay=args.amp_unmute_delay,
         amp_mute_delay=args.amp_mute_delay,
