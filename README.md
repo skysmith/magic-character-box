@@ -28,6 +28,7 @@ The software is intentionally testable before the hardware is finished. By defau
 - Known limitations: [docs/known-limitations.md](docs/known-limitations.md)
 - System sounds: [docs/system-sounds.md](docs/system-sounds.md)
 - Hardware profiles: [docs/hardware-profiles.md](docs/hardware-profiles.md)
+- Optional transactional player-load bridge: [docs/transactional-player-load.md](docs/transactional-player-load.md)
 - Printable assets: [docs/printable-assets.md](docs/printable-assets.md)
 - Printable STL files: [stl/](stl/README.md)
 - Parametric CAD source: [cad/](cad/README.md)
@@ -73,6 +74,12 @@ customer/product strategy.
 - Plays a startup chime when the service starts.
 - Plays a friendly discovery cue for unknown/unregistered tags.
 - Shares a tiny `config/device_state.json` file with the dashboard for the last-seen tag and recent plain-language events.
+
+Normal maker mode hot-reloads valid `characters.json` edits and preserves its
+last in-memory mapping when a rewrite is invalid. Coordinated installers may
+instead opt into the local, credential-free transactional player-load bridge;
+it is off by default and ordinary maker installs are unchanged. See
+[docs/transactional-player-load.md](docs/transactional-player-load.md).
 
 ## Quick Start: Dev Mode
 

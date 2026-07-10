@@ -57,6 +57,18 @@ class CharacterConfig:
         except json.JSONDecodeError as exc:
             raise ConfigError(f"Invalid JSON in {config_path}: {exc}") from exc
 
+        return cls.from_mapping(config_path, raw)
+
+    @classmethod
+    def from_mapping(cls, path: str | Path, raw: Any) -> "CharacterConfig":
+        """Build a config from an already-read JSON value.
+
+        The transactional player-load bridge uses this entry point so the
+        bytes it fingerprints are the same bytes it parses.  Normal maker
+        mode continues to use :meth:`load`.
+        """
+        config_path = Path(path).expanduser().resolve()
+
         if not isinstance(raw, dict):
             raise ConfigError("Character config must be a JSON object keyed by UID")
 

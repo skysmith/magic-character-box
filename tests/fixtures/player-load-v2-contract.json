@@ -1,0 +1,84 @@
+{
+  "ack_proof_fields": [
+    "activation_id",
+    "config_path",
+    "config_sha256",
+    "generation_metadata_sha256",
+    "generation_root",
+    "manifest_revision",
+    "operation",
+    "project_root",
+    "selected_binding_count",
+    "selected_file_count",
+    "selected_folder_count",
+    "selected_inventory_sha256",
+    "target_kind",
+    "target_label"
+  ],
+  "ack_schema": "story-dock-player-load-ack-v2",
+  "ack_statuses": [
+    "loaded",
+    "rejected"
+  ],
+  "canonical_json": {
+    "encoding": "utf-8",
+    "ensure_ascii": true,
+    "separators": [
+      ",",
+      ":"
+    ],
+    "sort_keys": true
+  },
+  "operations": [
+    "activate",
+    "rollback"
+  ],
+  "player_evidence_fields": [
+    "player_instance_id",
+    "player_pid",
+    "load_sequence",
+    "loaded_at"
+  ],
+  "rejection_reason_codes": [
+    "candidate-config-invalid",
+    "generation-invalid",
+    "selected-inventory-invalid"
+  ],
+  "request_fields": [
+    "activation_id",
+    "config_path",
+    "config_sha256",
+    "generation_metadata_sha256",
+    "generation_root",
+    "manifest_revision",
+    "operation",
+    "project_root",
+    "schema",
+    "selected_binding_count",
+    "selected_file_count",
+    "selected_folder_count",
+    "selected_inventory_sha256",
+    "target_kind",
+    "target_label"
+  ],
+  "request_schema": "story-dock-player-load-request-v2",
+  "selected_inventory_entry": {
+    "files": [
+      {
+        "byte_count": 123,
+        "path": "audio/example/memo.mp3",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    ],
+    "folder": "audio/example",
+    "mode": "first",
+    "uid": "04-A1"
+  },
+  "target_kinds": [
+    "manifest-revision",
+    "legacy-config"
+  ],
+  "uuid_text_forms": [
+    "lowercase-32-hex"
+  ]
+}

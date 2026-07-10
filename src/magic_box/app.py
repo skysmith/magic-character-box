@@ -15,6 +15,7 @@ from .audio import AudioPlayer
 from .config import CharacterConfig, ConfigError, project_root_for_config
 from .control import consume_stop_request, control_file_for_config
 from .nfc import NFCError, StopRequested, create_reader
+from .player_load import PlayerLoadBridge, PlayerLoadError
 from .runtime_state import append_event, record_tag, state_file_for_config
 from .volume import (
     DEFAULT_MAX_OUTPUT_VOLUME_PERCENT,
@@ -163,6 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("MAGIC_BOX_LOG_LEVEL", "INFO"),
         help="Python logging level",
     )
+    parser.add_argument(
+        "--transactional-config",
+        action="store_true",
+        default=_env_flag("MAGIC_BOX_TRANSACTIONAL_CONFIG"),
+        help=(
+            "Opt in to request/ack config activation and block ordinary mtime reloads. "
+            "Maker mode leaves this off."
+        ),
+    )
     return parser
 
 
@@ -180,6 +190,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         LOGGER.error("%s", exc)
         return 2
     config_mtime = _config_mtime(config.path)
+    player_load_bridge: PlayerLoadBridge | None = None
+    if args.transactional_config:
+        try:
+            player_load_bridge = PlayerLoadBridge(config)
+        except PlayerLoadError as exc:
+            LOGGER.error("Transactional config setup is unsafe: %s", exc)
+            return 2
 
     try:
         reader = create_reader(args.nfc)
@@ -215,9 +232,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         while True:
-            config, config_mtime, config_reloaded = _reload_config_if_changed(config_path, config, config_mtime)
+            if player_load_bridge is not None:
+                config_reloaded = player_load_bridge.poll()
+                config = player_load_bridge.config
+            else:
+                config, config_mtime, config_reloaded = _reload_config_if_changed(
+                    config_path,
+                    config,
+                    config_mtime,
+                )
             if config_reloaded:
-                LOGGER.info("Reloaded character config after sync update")
+                if player_load_bridge is not None:
+                    LOGGER.info("Loaded requested character config activation")
+                else:
+                    LOGGER.info("Reloaded character config after sync update")
 
             if consume_stop_request(control_path):
                 LOGGER.info("Admin stop audio requested")

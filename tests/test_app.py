@@ -3,18 +3,61 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from magic_box.app import (
     _TagPlaybackState,
+    build_parser,
+    main,
     _config_mtime,
     _play_system_sound,
     _reload_config_if_changed,
     _resolve_optional_audio_path,
 )
 from magic_box.config import CharacterConfig
+from magic_box.player_load import PlayerLoadError
 
 
 class AppSystemSoundTests(unittest.TestCase):
+    def test_transactional_config_is_opt_in(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MAGIC_BOX_TRANSACTIONAL_CONFIG", None)
+            self.assertFalse(build_parser().parse_args([]).transactional_config)
+            self.assertTrue(build_parser().parse_args(["--transactional-config"]).transactional_config)
+
+    def test_unsafe_transactional_startup_stops_before_reader_or_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            folder = root / "audio" / "first"
+            folder.mkdir(parents=True)
+            (folder / "memo.mp3").write_bytes(b"memo")
+            config_path = root / "config" / "characters.json"
+            config_path.parent.mkdir()
+            _write_config(
+                config_path,
+                {"04-A1": {"name": "First", "folder": "audio/first", "mode": "first"}},
+            )
+
+            with patch(
+                "magic_box.app.PlayerLoadBridge",
+                side_effect=PlayerLoadError("unsafe persisted proof"),
+            ), patch("magic_box.app.create_reader") as create_reader, patch(
+                "magic_box.app.AudioPlayer"
+            ) as audio_player, self.assertLogs("magic_box.app", level="ERROR"):
+                result = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--transactional-config",
+                        "--startup-sound",
+                        "",
+                    ]
+                )
+
+            self.assertEqual(result, 2)
+            create_reader.assert_not_called()
+            audio_player.assert_not_called()
+
     def test_resolve_optional_audio_path_uses_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             config_path = Path(temp_dir) / "config" / "characters.json"
