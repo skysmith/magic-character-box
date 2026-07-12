@@ -31,6 +31,22 @@ class SystemdAudioTests(unittest.TestCase):
                 self.assertIn("KillSignal=SIGTERM", text)
                 self.assertIn("TimeoutStopSec=15s", text)
 
+    def test_player_services_wait_for_unprivileged_gpio_and_spi_access(self) -> None:
+        for service_name in ("magic-character-box.service", "magic-character-box-dev.service"):
+            with self.subTest(service=service_name):
+                text = (ROOT / "systemd" / service_name).read_text(encoding="utf-8")
+
+                self.assertIn("User=pi", text)
+                self.assertIn("SupplementaryGroups=audio gpio spi", text)
+                self.assertIn(
+                    "ExecStartPre=/home/pi/magic-character-box/.venv/bin/python "
+                    "-m magic_box.hardware_ready --timeout 60",
+                    text,
+                )
+                self.assertIn("Restart=on-failure", text)
+                self.assertIn("RestartSec=5", text)
+                self.assertNotIn("systemd-udev-settle", text)
+
 
 if __name__ == "__main__":
     unittest.main()

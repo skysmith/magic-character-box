@@ -27,6 +27,25 @@ sudo raspi-config
 
 Choose `Interface Options` -> `SPI` -> enable, then reboot.
 
+## Boot-Time Hardware Readiness
+
+The player services run as `pi` with the `audio`, `gpio`, and `spi` groups.
+Before Python initializes the PN532 or amp GPIO, an `ExecStartPre` check waits
+up to 60 seconds for `/dev/gpiomem` and `/dev/spidev0.0` to become readable and
+writable by that unprivileged process. This covers slow udev permission setup
+without running the player as root. A timeout fails the start cleanly, and the
+existing systemd restart policy remains the fallback.
+
+After copying a player service, verify the same access contract manually with:
+
+```bash
+sudo -u pi /home/pi/magic-character-box/.venv/bin/python \
+  -m magic_box.hardware_ready --timeout 0
+```
+
+If it fails, confirm `id -nG pi` includes `audio`, `gpio`, and `spi`, then use
+[troubleshooting.md](troubleshooting.md#box-does-not-start-after-reboot).
+
 ## Audio Notes
 
 For the MAX98357A I2S amp, configure Raspberry Pi OS to route audio to the I2S device. A typical `/boot/firmware/config.txt` setup is:

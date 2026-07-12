@@ -146,6 +146,22 @@ Common causes:
 - SPI or I2S setup changed before reboot.
 - Audio device is unavailable because the MAX98357A ALSA card is missing or the service is pointing at the wrong output path.
 
+The player waits up to 60 seconds for unprivileged GPIO and SPI access before
+starting. Check that readiness path as the actual service user:
+
+```bash
+ls -l /dev/gpiomem /dev/spidev0.0
+id -nG pi
+sudo -u pi /home/pi/magic-character-box/.venv/bin/python \
+  -m magic_box.hardware_ready --timeout 0
+```
+
+Both device nodes must be readable and writable by `pi`; its groups should
+include `gpio` and `spi`. If an older deployment logs `No access to /dev/mem`
+only during early boot, restore the current player service before debugging the
+PN532 wiring. That RPi.GPIO message can mean `/dev/gpiomem` existed before udev
+finished applying its group permissions.
+
 ## Running Out Of Space
 
 The dashboard `Test box` result includes free storage. You can also run:

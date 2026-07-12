@@ -6,6 +6,7 @@ Wants=sound.target
 [Service]
 Type=simple
 User=pi
+SupplementaryGroups=audio gpio spi
 WorkingDirectory=/home/pi/magic-character-box
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=MAGIC_BOX_NFC=file
@@ -18,6 +19,7 @@ Environment=MAGIC_BOX_MAX_OUTPUT_VOLUME=75
 Environment=MAGIC_BOX_AUDIO_BACKEND=continuous-pcm
 Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -s --rate 48000 --stereo -e s16"
 Environment="MAGIC_BOX_AUDIO_SINK_CMD=aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000"
+ExecStartPre=/home/pi/magic-character-box/.venv/bin/python -m magic_box.hardware_ready --timeout 60
 ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.app --config /home/pi/magic-character-box/config/characters.json --nfc file
 KillMode=mixed
 KillSignal=SIGTERM
