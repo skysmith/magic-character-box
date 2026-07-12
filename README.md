@@ -148,7 +148,11 @@ python -m magic_box.app --nfc pn532
 You can also use environment variables:
 
 ```bash
-MAGIC_BOX_NFC=pn532 MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" python -m magic_box.app
+MAGIC_BOX_NFC=pn532 \
+MAGIC_BOX_AUDIO_BACKEND=continuous-pcm \
+MAGIC_BOX_AUDIO_CMD="mpg123 -q -s --rate 48000 --stereo -e s16" \
+MAGIC_BOX_AUDIO_SINK_CMD="aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000" \
+python -m magic_box.app
 ```
 
 ## Scan A Tag

@@ -15,10 +15,13 @@ Environment=MAGIC_BOX_AMP_SD_GPIO=16
 Environment=MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0
 Environment=MAGIC_BOX_DEFAULT_VOLUME=50
 Environment=MAGIC_BOX_MAX_OUTPUT_VOLUME=75
-Environment=MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
-Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16"
-Environment=MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3
+Environment=MAGIC_BOX_AUDIO_BACKEND=continuous-pcm
+Environment="MAGIC_BOX_AUDIO_CMD=mpg123 -q -s --rate 48000 --stereo -e s16"
+Environment="MAGIC_BOX_AUDIO_SINK_CMD=aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000"
 ExecStart=/home/pi/magic-character-box/.venv/bin/python -m magic_box.app --config /home/pi/magic-character-box/config/characters.json --nfc file
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=15s
 Restart=on-failure
 RestartSec=5
 

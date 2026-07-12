@@ -65,7 +65,7 @@ If you hear clicks but no sound, recheck `BCLK`, `LRC`, and `DIN`; swapped clock
 The recommended build uses three layers of protection:
 
 - MAX98357A `SD` wired to `GPIO16 / physical pin 36`.
-- Direct `mpg123` playback through `plughw:CARD=MAX98357A,DEV=0` with `-e s16`.
+- One continuous `aplay` sink on `plughw:CARD=MAX98357A,DEV=0`, fixed at 48 kHz stereo S16.
 - `MAGIC_BOX_MAX_OUTPUT_VOLUME=75` to keep dashboard full-volume below raw `mpg123` full scale.
 
 Uploaded and recorded files are also prepared with short fades and loudness normalization when `ffmpeg` is installed.
@@ -89,7 +89,7 @@ sudo systemctl restart magic-character-box magic-character-box-admin
 
 If it still crackles at normal room volume, keep the dashboard volume where it is and lower `MAGIC_BOX_MAX_OUTPUT_VOLUME` in the systemd service override or service file. Values around `65` to `75` are usually safer for a small MAX98357A/passive-speaker path than raw full-scale output.
 
-If volume changes do not affect the crackle, suspect the output path or hardware instead. Founder player services should use `MAGIC_BOX_AUDIO_BACKEND=mpg123-remote` with `MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3`, `MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0`, and `mpg123 ... -a plughw:CARD=MAX98357A,DEV=0 ... -e s16`. The admin services intentionally stay on the one-shot `subprocess` backend so they do not hold a second always-open ALSA client. If a deployed box shows `dmix`, `-e s32`, Pulse, a missing player warmup file, per-track amp muting, or an active `magic-character-box-audio-keeper.service`, restore the app/admin systemd service files or service override, disable the keeper, and restart `magic-character-box` and `magic-character-box-admin`.
+If volume changes do not affect the crackle, suspect the output path or hardware instead. Player services should use `MAGIC_BOX_AUDIO_BACKEND=continuous-pcm`, an `mpg123 -s --rate 48000 --stereo -e s16` decoder, `MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0`, and one `aplay` sink fixed to `plughw:CARD=MAX98357A,DEV=0` at 48 kHz stereo S16. Verify both `mpg123` and the `alsa-utils` package that supplies `aplay` are installed. The admin services intentionally stay on one-shot playback and should not run alongside finished-box player mode. If a deployed box shows `mpg123-remote`, `dmix`, `-e s32`, Pulse, per-track amp muting, or an active `magic-character-box-audio-keeper.service`, restore the player service and restart it. Between clips, exactly one `aplay` process should hold the ALSA PCM device; idle zero PCM must not count as audible playback.
 
 ## Browser Recording Does Not Work
 

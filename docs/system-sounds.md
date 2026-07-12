@@ -16,7 +16,7 @@ Files:
 | `audio/system/unknown-tag.mp3` | Played when the box sees an unregistered NFC tag. |
 | `audio/system/success.mp3` | Small setup/UI success cue for future workflows. |
 | `audio/system/error.mp3` | Small setup/UI error cue for future workflows. |
-| `audio/system/silence.mp3` | Silent warmup file for the persistent audio backend. |
+| `audio/system/silence.mp3` | Legacy/manual warmup asset; the default continuous PCM backend generates idle silence directly. |
 
 The default sounds are generated with `ffmpeg` sine waves, so they are safe to regenerate and ship as examples.
 

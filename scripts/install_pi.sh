@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv mpg123 ffmpeg git bluez
+sudo apt install -y python3 python3-pip python3-venv mpg123 alsa-utils ffmpeg git bluez
 
 python3 -m venv .venv
 . .venv/bin/activate

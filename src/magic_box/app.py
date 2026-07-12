@@ -7,11 +7,12 @@ from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
+import signal
 import time
 from typing import Sequence
 
 from .amp import create_amp_gate
-from .audio import AudioPlayer
+from .audio import AudioInitializationError, AudioPlayer, AudioRuntimeError
 from .config import CharacterConfig, ConfigError, project_root_for_config
 from .control import consume_stop_request, control_file_for_config
 from .nfc import NFCError, StopRequested, create_reader
@@ -30,6 +31,35 @@ from .volume import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STARTUP_SOUND = "audio/system/startup-chime.mp3"
 DEFAULT_UNKNOWN_SOUND = "audio/system/unknown-tag.mp3"
+
+
+class _ServiceStopRequested(Exception):
+    """Raised by SIGTERM so the player can close its children in order."""
+
+
+def _handle_service_stop(_signum: int, _frame: object) -> None:
+    raise _ServiceStopRequested
+
+
+class _DeferredServiceStopHandler:
+    """Defer SIGTERM until audio construction has a closeable owner."""
+
+    def __init__(self) -> None:
+        self.requested = False
+        self._armed = False
+
+    def __call__(self, signum: int, frame: object) -> None:
+        self.requested = True
+        if self._armed:
+            _handle_service_stop(signum, frame)
+
+    def arm(self) -> None:
+        self._armed = True
+        if self.requested:
+            raise _ServiceStopRequested
+
+    def defer(self) -> None:
+        self._armed = False
 
 
 def _optional_int(value: str | None) -> int | None:
@@ -65,9 +95,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--audio-backend",
-        choices=["subprocess", "mpg123-remote"],
+        choices=["subprocess", "mpg123-remote", "continuous-pcm"],
         default=os.getenv("MAGIC_BOX_AUDIO_BACKEND", "subprocess"),
-        help="Use a one-shot subprocess per clip or a persistent mpg123 remote backend.",
+        help="Use one-shot playback, mpg123 remote mode, or one continuous direct PCM sink.",
+    )
+    parser.add_argument(
+        "--audio-sink-command",
+        default=os.getenv("MAGIC_BOX_AUDIO_SINK_CMD", "aplay -q"),
+        help="Long-lived raw PCM sink command used by the continuous-pcm backend.",
     )
     parser.add_argument(
         "--audio-warmup-file",
@@ -212,26 +247,32 @@ def main(argv: Sequence[str] | None = None) -> int:
     volume = VolumeControl(volume_path, default_percent=args.default_volume)
     apply_pipewire_volume(effective_output_volume(volume.get(), args.max_output_volume))
     amp_gate = create_amp_gate(args.amp_sd_gpio)
-    player = AudioPlayer(
-        command=args.audio_command,
-        dry_run=args.dry_run_audio,
-        volume_getter=volume.get,
-        max_output_percent=args.max_output_volume,
-        amp_gate=amp_gate,
-        amp_unmute_delay=args.amp_unmute_delay,
-        amp_mute_delay=args.amp_mute_delay,
-        mute_between_tracks=args.amp_mute_between_tracks,
-        use_mpg123_remote=args.audio_backend == "mpg123-remote",
-        warmup_file=Path(args.audio_warmup_file).expanduser().resolve() if args.audio_warmup_file else None,
-    )
-    LOGGER.info("Magic Character Box ready using %s NFC", args.nfc)
-    _safe_append_event(state_path, "system", "Box started.")
-    _play_system_sound(player, startup_sound, "startup")
-
-    tag_state = _TagPlaybackState()
-
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    stop_handler = _DeferredServiceStopHandler()
+    signal.signal(signal.SIGTERM, stop_handler)
+    player: AudioPlayer | None = None
     try:
+        player = AudioPlayer(
+            command=args.audio_command,
+            dry_run=args.dry_run_audio,
+            volume_getter=volume.get,
+            max_output_percent=args.max_output_volume,
+            amp_gate=amp_gate,
+            amp_unmute_delay=args.amp_unmute_delay,
+            amp_mute_delay=args.amp_mute_delay,
+            mute_between_tracks=args.amp_mute_between_tracks,
+            use_mpg123_remote=args.audio_backend == "mpg123-remote",
+            use_continuous_pcm=args.audio_backend == "continuous-pcm",
+            sink_command=args.audio_sink_command,
+            warmup_file=Path(args.audio_warmup_file).expanduser().resolve() if args.audio_warmup_file else None,
+        )
+        stop_handler.arm()
+        LOGGER.info("Magic Character Box ready using %s NFC", args.nfc)
+        _safe_append_event(state_path, "system", "Box started.")
+        _play_system_sound(player, startup_sound, "startup")
+        tag_state = _TagPlaybackState()
         while True:
+            player.raise_if_unhealthy()
             if player_load_bridge is not None:
                 config_reloaded = player_load_bridge.poll()
                 config = player_load_bridge.config
@@ -285,14 +326,47 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             LOGGER.info("Playing %s (%s)", character.name, character.uid)
             _safe_record_tag(state_path, uid, known=True, character_name=character.name, source="playback")
-            _safe_append_event(state_path, "audio", f"{character.name} played.", uid=uid, character_name=character.name)
             if player.play_folder(character.folder, character.mode):
+                _safe_append_event(
+                    state_path,
+                    "audio",
+                    f"{character.name} playback requested.",
+                    uid=uid,
+                    character_name=character.name,
+                )
                 tag_state.note_audio_started(uid)
+            else:
+                _safe_append_event(
+                    state_path,
+                    "audio",
+                    "Selected audio could not start.",
+                    uid=uid,
+                    character_name=character.name,
+                )
+    except AudioInitializationError as exc:
+        if stop_handler.requested:
+            LOGGER.info("Service stop requested during audio initialization")
+            return 0
+        LOGGER.error("Audio initialization failed: %s", exc)
+        return 2
+    except AudioRuntimeError as exc:
+        LOGGER.error("Audio backend failed: %s", exc)
+        return 3
+    except _ServiceStopRequested:
+        LOGGER.info("Service stop requested")
+        return 0
     except KeyboardInterrupt:
         LOGGER.info("Interrupted")
         return 130
     finally:
-        player.close()
+        stop_handler.defer()
+        try:
+            if player is None:
+                amp_gate.close()
+            else:
+                player.close()
+        finally:
+            signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def _resolve_optional_audio_path(config_path: Path, value: str | None) -> Path | None:

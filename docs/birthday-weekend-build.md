@@ -32,7 +32,7 @@ The box uses:
 
 - `audio/system/startup-chime.mp3` when the service starts.
 - `audio/system/unknown-tag.mp3` when it sees an unregistered tag.
-- `audio/system/silence.mp3` to keep the audio path warm.
+- Continuous zero PCM between clips to keep the audio path warm; `silence.mp3` remains a useful manual test asset.
 
 For extra magic, replace `unknown-tag.mp3` with a recorded voice saying "I found a new character."
 

@@ -1,12 +1,14 @@
 from pathlib import Path
 import json
 import os
+import signal
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from magic_box.app import (
     _TagPlaybackState,
+    _handle_service_stop,
     build_parser,
     main,
     _config_mtime,
@@ -15,6 +17,7 @@ from magic_box.app import (
     _resolve_optional_audio_path,
 )
 from magic_box.config import CharacterConfig
+from magic_box.audio import AudioInitializationError, AudioRuntimeError
 from magic_box.player_load import PlayerLoadError
 
 
@@ -57,6 +60,117 @@ class AppSystemSoundTests(unittest.TestCase):
             self.assertEqual(result, 2)
             create_reader.assert_not_called()
             audio_player.assert_not_called()
+
+    def test_audio_initialization_failure_never_reports_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir()
+            _write_config(config_path, {})
+            gate = MagicMock()
+
+            with patch("magic_box.app.create_reader"), patch(
+                "magic_box.app.create_amp_gate", return_value=gate
+            ), patch(
+                "magic_box.app.AudioPlayer",
+                side_effect=AudioInitializationError("sink missing"),
+            ), self.assertLogs("magic_box.app", level="ERROR") as logs:
+                result = main(["--config", str(config_path), "--startup-sound", ""])
+
+            self.assertEqual(result, 2)
+            gate.close.assert_called_once_with()
+            self.assertFalse(any("ready using" in line for line in logs.output))
+
+    def test_runtime_sink_failure_exits_nonzero_for_systemd_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir()
+            _write_config(config_path, {})
+            player = MagicMock()
+            player.raise_if_unhealthy.side_effect = AudioRuntimeError("sink exited")
+
+            with patch("magic_box.app.create_reader"), patch(
+                "magic_box.app.AudioPlayer", return_value=player
+            ), self.assertLogs("magic_box.app", level="ERROR"):
+                result = main(["--config", str(config_path), "--startup-sound", ""])
+
+            self.assertEqual(result, 3)
+            player.close.assert_called_once_with()
+
+    def test_sigterm_path_closes_player_and_restores_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir()
+            _write_config(config_path, {})
+            player = MagicMock()
+            previous = signal.getsignal(signal.SIGTERM)
+
+            with patch("magic_box.app.create_reader", return_value=_TerminatingReader()), patch(
+                "magic_box.app.AudioPlayer", return_value=player
+            ), self.assertLogs("magic_box.app", level="INFO"):
+                result = main(["--config", str(config_path), "--startup-sound", ""])
+
+            self.assertEqual(result, 0)
+            player.close.assert_called_once_with()
+            self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_sigterm_during_audio_initialization_is_deferred_until_player_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir()
+            _write_config(config_path, {})
+            player = MagicMock()
+            previous = signal.getsignal(signal.SIGTERM)
+
+            def initialize_player(**_kwargs: object) -> MagicMock:
+                installed_handler = signal.getsignal(signal.SIGTERM)
+                self.assertTrue(callable(installed_handler))
+                installed_handler(signal.SIGTERM, None)  # type: ignore[operator]
+                return player
+
+            with patch("magic_box.app.create_reader"), patch(
+                "magic_box.app.AudioPlayer", side_effect=initialize_player
+            ), self.assertLogs("magic_box.app", level="INFO"):
+                result = main(["--config", str(config_path), "--startup-sound", ""])
+
+            self.assertEqual(result, 0)
+            player.close.assert_called_once_with()
+            self.assertIs(signal.getsignal(signal.SIGTERM), previous)
+
+    def test_character_event_records_request_or_generic_start_failure_not_played(self) -> None:
+        for started, expected_message in (
+            (True, "First playback requested."),
+            (False, "Selected audio could not start."),
+        ):
+            with self.subTest(started=started), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                audio_folder = root / "audio" / "first"
+                audio_folder.mkdir(parents=True)
+                config_path = root / "config" / "characters.json"
+                config_path.parent.mkdir()
+                _write_config(
+                    config_path,
+                    {"04-A1": {"name": "First", "folder": "audio/first", "mode": "first"}},
+                )
+                player = MagicMock()
+                player.play_folder.return_value = started
+
+                with patch(
+                    "magic_box.app.create_reader",
+                    return_value=_OneTagThenTerminateReader("04-A1"),
+                ), patch(
+                    "magic_box.app.AudioPlayer",
+                    return_value=player,
+                ), patch(
+                    "magic_box.app._safe_record_tag",
+                ), patch(
+                    "magic_box.app._safe_append_event",
+                ) as append_event, self.assertLogs("magic_box.app", level="INFO"):
+                    result = main(["--config", str(config_path), "--startup-sound", ""])
+
+                self.assertEqual(result, 0)
+                messages = [call.args[2] for call in append_event.call_args_list]
+                self.assertIn(expected_message, messages)
+                self.assertFalse(any(message.endswith(" played.") for message in messages))
 
     def test_resolve_optional_audio_path_uses_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -188,6 +302,25 @@ class _FakePlayer:
     def play_file(self, path: Path) -> bool:
         self.events.append(("play", path))
         return True
+
+
+class _TerminatingReader:
+    def read_uid(self) -> str | None:
+        _handle_service_stop(signal.SIGTERM, None)
+        return None
+
+
+class _OneTagThenTerminateReader:
+    def __init__(self, uid: str) -> None:
+        self.uid = uid
+        self.delivered = False
+
+    def read_uid(self) -> str | None:
+        if not self.delivered:
+            self.delivered = True
+            return self.uid
+        _handle_service_stop(signal.SIGTERM, None)
+        return None
 
 
 def _write_config(path: Path, data: dict[str, object], *, mtime_offset: float = 0.0) -> None:
