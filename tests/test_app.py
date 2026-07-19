@@ -22,6 +22,9 @@ from magic_box.player_load import PlayerLoadError
 
 
 class AppSystemSoundTests(unittest.TestCase):
+    def test_hosted_ndef_reader_mode_is_explicitly_available(self) -> None:
+        self.assertEqual(build_parser().parse_args(["--nfc", "pn532-ndef"]).nfc, "pn532-ndef")
+
     def test_transactional_config_is_opt_in(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("MAGIC_BOX_TRANSACTIONAL_CONFIG", None)

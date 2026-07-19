@@ -85,7 +85,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--nfc",
         default=os.getenv("MAGIC_BOX_NFC", "mock"),
-        choices=["mock", "keyboard", "dev", "file", "trigger-file", "queue", "pn532", "pn532-spi", "spi"],
+        choices=[
+            "mock",
+            "keyboard",
+            "dev",
+            "file",
+            "trigger-file",
+            "queue",
+            "pn532",
+            "pn532-spi",
+            "spi",
+            "pn532-ndef",
+        ],
         help="NFC reader backend",
     )
     parser.add_argument(

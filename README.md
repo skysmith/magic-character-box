@@ -65,11 +65,14 @@ customer/product strategy.
 ## Current Behavior
 
 - Reads NFC UIDs from either a mock keyboard reader or a PN532 over SPI.
+- Offers an explicit `pn532-ndef` hosted mode that identifies a Story Sticker
+  from its verified `https://tap.getstorydock.com/s/<token>` NDEF URL. This mode
+  derives an opaque `sdpk1_...` config key and never falls back to the tag UID.
 - Normalizes UIDs such as `04:a1:22:9b` to `04-A1-22-9B`.
 - Looks up characters in `config/characters.json`.
 - Stops current playback when a different known character is scanned.
 - Plays the first, shuffled, or next sequenced `.mp3` file in the mapped folder.
-- Ignores repeat scans of the same UID for a cooldown window.
+- Ignores repeat scans of the same tag identity for a cooldown window.
 - Continues playing when a tag is removed. In the MVP, only a new known tag changes playback.
 - Plays a startup chime when the service starts.
 - Plays a friendly discovery cue for unknown/unregistered tags.
@@ -154,6 +157,18 @@ MAGIC_BOX_AUDIO_CMD="mpg123 -q -s --rate 48000 --stereo -e s16" \
 MAGIC_BOX_AUDIO_SINK_CMD="aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000" \
 python -m magic_box.app
 ```
+
+Ordinary `pn532` mode keeps the public maker workflow and uses the physical tag
+UID. A hosted deployment can opt in to URL identity instead:
+
+```bash
+python -m magic_box.app --nfc pn532-ndef
+```
+
+In `pn532-ndef` mode, the tag must contain exactly one well-formed NDEF HTTPS
+URI record at `https://tap.getstorydock.com/s/<token>`. The player reads that
+URL directly from the NTAG, derives a one-way `sdpk1_...` lookup key, and never
+uses the physical UID as a fallback. URLs and tokens are not written to logs.
 
 ## Scan A Tag
 

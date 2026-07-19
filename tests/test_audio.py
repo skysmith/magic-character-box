@@ -19,7 +19,6 @@ from magic_box.audio import (
     _mpg123_status_is_playing,
     _prepare_nonblocking_sink_fd,
     _SinkWriteCancelled,
-    _SinkWriteTimedOut,
     _uses_pulse_output,
     _write_nonblocking_fd,
 )

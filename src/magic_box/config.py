@@ -11,6 +11,7 @@ import unicodedata
 
 
 VALID_MODES = {"first", "shuffle", "sequence"}
+STORY_PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
 
 
 class ConfigError(Exception):
@@ -26,10 +27,21 @@ class Character:
 
 
 def normalize_uid(uid: str) -> str:
-    """Normalize a typed or NFC-read UID into the app's canonical form."""
-    value = uid.strip().upper()
+    """Normalize a typed UID or hosted playback key into canonical form."""
+    value = uid.strip()
     if not value:
         raise ValueError("UID cannot be empty")
+
+    # Hosted NDEF playback keys occupy a reserved, exact namespace. Preserve
+    # the lowercase digest instead of applying maker-mode UID normalization,
+    # and reject lookalikes so a malformed hosted mapping cannot silently turn
+    # into an unrelated named UID.
+    if value.lower().startswith("sdpk1"):
+        if STORY_PLAYBACK_KEY_RE.fullmatch(value) is None:
+            raise ValueError("Playback key must use canonical sdpk1_<64 lowercase hex> form")
+        return value
+
+    value = value.upper()
 
     compact = re.sub(r"[-_\s:]+", "", value)
     is_hex_uid = bool(re.fullmatch(r"[0-9A-F]+", compact))
@@ -75,7 +87,10 @@ class CharacterConfig:
         project_root = config_path.parent.parent
         characters: dict[str, Character] = {}
         for raw_uid, raw_character in raw.items():
-            uid = normalize_uid(str(raw_uid))
+            try:
+                uid = normalize_uid(str(raw_uid))
+            except ValueError as exc:
+                raise ConfigError(f"Character config key was invalid: {exc}") from exc
             characters[uid] = _parse_character(uid, raw_character, project_root)
 
         return cls(config_path, characters)
