@@ -34,9 +34,9 @@ _TYPE2_MEMORY_CONTROL_TLV = 0x02
 _NDEF_TNF_WELL_KNOWN = 0x01
 _NDEF_URI_TYPE = b"U"
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
-_NTAG_SELECTION_SETTLE_SECONDS = 0.8
 _NTAG_PAGE_READ_ATTEMPTS = 10
-_NTAG_PAGE_RETRY_DELAY_SECONDS = 0.08
+_NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
+_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
 
 # NFC Forum URI RTD identifier codes. Story Sticker URLs only accept the
 # no-prefix form or HTTPS forms; HTTP and every non-web scheme fail closed.
@@ -172,12 +172,10 @@ class PN532NDEFReader:
         timeout: float = 0.1,
         *,
         expected_origin: str = STORY_STICKER_ORIGIN,
-        selection_settle_seconds: float = _NTAG_SELECTION_SETTLE_SECONDS,
     ) -> None:
         _require_https_origin(expected_origin)
         self.timeout = timeout
         self.expected_origin = expected_origin
-        self.selection_settle_seconds = max(0.0, selection_settle_seconds)
         self._pn532 = _open_pn532_spi()
 
     def read_uid(self) -> str | None:
@@ -190,8 +188,6 @@ class PN532NDEFReader:
             return None
 
         try:
-            if self.selection_settle_seconds:
-                time.sleep(self.selection_settle_seconds)
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
@@ -300,6 +296,10 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
 
 
 def _read_type2_tlv_memory(pn532: Any) -> bytes:
+    # Read the first NDEF user page immediately after selection. This mirrors
+    # the proven writer/readback order and avoids spending the customer's
+    # short physical tap on a manufacturing-only settle delay.
+    first_user_page = _read_ntag_page(pn532, _NTAG_USER_START_PAGE)
     cc = _read_ntag_page(pn532, _NTAG_CC_PAGE)
     if (
         cc[0] != _TYPE2_MAGIC
@@ -313,8 +313,11 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
     if data_area_bytes > _MAX_NTAG_DATA_AREA_BYTES:
         raise ValueError("Type 2 data area exceeded supported NTAG capacity")
     page_count = (data_area_bytes + _NTAG_PAGE_BYTES - 1) // _NTAG_PAGE_BYTES
-    memory = bytearray()
-    for page in range(_NTAG_USER_START_PAGE, _NTAG_USER_START_PAGE + page_count):
+    memory = bytearray(first_user_page)
+    terminator_end = _complete_tlv_prefix_end(memory)
+    if terminator_end is not None:
+        return bytes(memory[:terminator_end])
+    for page in range(_NTAG_USER_START_PAGE + 1, _NTAG_USER_START_PAGE + page_count):
         memory.extend(_read_ntag_page(pn532, page))
         terminator_end = _complete_tlv_prefix_end(memory)
         if terminator_end is not None:
@@ -325,13 +328,23 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
 def _read_ntag_page(pn532: Any, page: int) -> bytes:
     wrong_size = False
     for attempt in range(_NTAG_PAGE_READ_ATTEMPTS):
-        block = pn532.ntag2xx_read_block(page)
+        try:
+            block = pn532.ntag2xx_read_block(page)
+        except Exception:
+            block = None
         if block is not None:
             value = bytes(block)
             if len(value) == _NTAG_PAGE_BYTES:
                 return value
             wrong_size = True
         if attempt + 1 < _NTAG_PAGE_READ_ATTEMPTS:
+            # A failed Type 2 command can leave the PN532 without an active
+            # target. Re-select the still-present sticker before retrying;
+            # the returned UID is deliberately ignored and is never identity.
+            try:
+                pn532.read_passive_target(timeout=_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS)
+            except Exception:
+                pass
             time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
     if wrong_size:
         raise ValueError("NTAG page had the wrong size")

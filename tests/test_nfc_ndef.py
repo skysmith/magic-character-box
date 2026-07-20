@@ -28,7 +28,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             "sdpk1_9a1a0b2715b28494d7c368b315a9aaf0d359124421d51a50cdd403f10d98d424",
         )
         self.assertGreater(len(fake.read_pages), 4)
-        self.assertEqual(fake.read_pages[0], 3)
+        self.assertEqual(fake.read_pages[:2], [4, 3])
         self.assertNotIn(token, key or "")
 
     def test_no_tag_returns_none_without_reading_memory(self) -> None:
@@ -37,6 +37,19 @@ class PN532NDEFReaderTests(unittest.TestCase):
 
         self.assertIsNone(reader.read_uid())
         self.assertEqual(fake.read_pages, [])
+
+    def test_successful_tap_has_no_manufacturing_settle_delay(self) -> None:
+        token = "quick-tap-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+        )
+
+        with patch("magic_box.nfc.time.sleep") as sleep:
+            key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_playback_key_from_token(token))
+        sleep.assert_not_called()
 
     def test_partial_page_read_fails_closed_without_uid_fallback(self) -> None:
         token = "a-token-long-enough-to-cross-several-pages"
@@ -68,6 +81,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(fake.page_read_attempts[3], 3)
         self.assertEqual(fake.page_read_attempts[4], 2)
         self.assertGreaterEqual(sleep.call_count, 3)
+        self.assertEqual(fake.selection_attempts, 4)
 
     def test_truncated_tlv_without_terminator_fails_closed(self) -> None:
         token = "truncated-token"
@@ -215,10 +229,12 @@ class _FakePN532:
             },
         }
         self.read_pages: list[int] = []
+        self.selection_attempts = 0
         self.transient_page_failures = dict(transient_page_failures or {})
         self.page_read_attempts: dict[int, int] = {}
 
     def read_passive_target(self, *, timeout: float) -> bytes | None:
+        self.selection_attempts += 1
         return self.uid
 
     def ntag2xx_read_block(self, page: int) -> bytes | None:
@@ -233,7 +249,7 @@ class _FakePN532:
 
 def _ndef_reader(fake: _FakePN532) -> PN532NDEFReader:
     with patch("magic_box.nfc._open_pn532_spi", return_value=fake):
-        return PN532NDEFReader(selection_settle_seconds=0)
+        return PN532NDEFReader()
 
 
 def _uri_record(url: str, *, header: int = 0xD1, prefix_code: int = 0x04) -> bytes:
