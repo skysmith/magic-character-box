@@ -6,6 +6,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SystemdAudioTests(unittest.TestCase):
+    def test_player_services_do_not_order_after_the_target_that_starts_them(self) -> None:
+        for service_name in ("magic-character-box.service", "magic-character-box-dev.service"):
+            with self.subTest(service=service_name):
+                text = (ROOT / "systemd" / service_name).read_text(encoding="utf-8")
+
+                self.assertIn("WantedBy=multi-user.target", text)
+                self.assertNotIn("After=multi-user.target", text)
+                self.assertIn("After=sound.target", text)
+
     def test_player_services_use_one_fixed_format_continuous_alsa_sink(self) -> None:
         for service_name in ("magic-character-box.service", "magic-character-box-dev.service"):
             with self.subTest(service=service_name):

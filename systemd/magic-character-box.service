@@ -1,6 +1,6 @@
 [Unit]
 Description=Magic Character Box
-After=multi-user.target sound.target
+After=sound.target
 Wants=sound.target
 
 [Service]
