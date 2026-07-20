@@ -34,6 +34,9 @@ _TYPE2_MEMORY_CONTROL_TLV = 0x02
 _NDEF_TNF_WELL_KNOWN = 0x01
 _NDEF_URI_TYPE = b"U"
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
+_NTAG_SELECTION_SETTLE_SECONDS = 0.8
+_NTAG_PAGE_READ_ATTEMPTS = 10
+_NTAG_PAGE_RETRY_DELAY_SECONDS = 0.08
 
 # NFC Forum URI RTD identifier codes. Story Sticker URLs only accept the
 # no-prefix form or HTTPS forms; HTTP and every non-web scheme fail closed.
@@ -169,10 +172,12 @@ class PN532NDEFReader:
         timeout: float = 0.1,
         *,
         expected_origin: str = STORY_STICKER_ORIGIN,
+        selection_settle_seconds: float = _NTAG_SELECTION_SETTLE_SECONDS,
     ) -> None:
         _require_https_origin(expected_origin)
         self.timeout = timeout
         self.expected_origin = expected_origin
+        self.selection_settle_seconds = max(0.0, selection_settle_seconds)
         self._pn532 = _open_pn532_spi()
 
     def read_uid(self) -> str | None:
@@ -185,6 +190,8 @@ class PN532NDEFReader:
             return None
 
         try:
+            if self.selection_settle_seconds:
+                time.sleep(self.selection_settle_seconds)
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
@@ -192,10 +199,15 @@ class PN532NDEFReader:
                 story_url,
                 expected_origin=self.expected_origin,
             )
-        except Exception:
+        except Exception as exc:
             # Do not include the underlying parse error, URL, or token in an
-            # exception that the app will log. Invalid NDEF must fail closed.
-            raise NFCError("Story Sticker URL data could not be verified.") from None
+            # exception that the app will log. The bounded reason code is
+            # intentionally value-free so physical QA can distinguish tag
+            # formatting failures without exposing the tag UID or URL.
+            reason = _safe_ndef_rejection_reason(exc)
+            raise NFCError(
+                f"Story Sticker URL data could not be verified ({reason})."
+            ) from None
 
 
 def story_playback_key_from_token(token: str) -> str:
@@ -259,6 +271,34 @@ def _require_https_origin(origin: str) -> None:
         raise ValueError("Story Sticker origin was invalid")
 
 
+def _safe_ndef_rejection_reason(exc: Exception) -> str:
+    """Return a bounded, value-free reason for a rejected physical tag."""
+
+    return {
+        "Type 2 capability container was invalid": "capability-container",
+        "Type 2 data area exceeded supported NTAG capacity": "tag-capacity",
+        "Type 2 data did not contain a complete TLV stream": "tlv-stream",
+        "NTAG page could not be read": "page-read",
+        "NTAG page had the wrong size": "page-size",
+        "TLV payload was incomplete": "tlv-payload",
+        "Type 2 control TLV was invalid": "control-tlv",
+        "Type 2 TLV stream was not a single NDEF message": "ndef-tlv-count",
+        "NDEF message was empty": "ndef-empty",
+        "Type 2 TLV stream was incomplete": "tlv-stream",
+        "TLV length was missing": "tlv-length",
+        "Extended TLV length was incomplete": "tlv-length",
+        "NDEF record was incomplete": "ndef-record",
+        "NDEF message was not one well-known record": "ndef-record-shape",
+        "NDEF payload length was missing": "ndef-payload-length",
+        "NDEF payload length was incomplete": "ndef-payload-length",
+        "NDEF message contained extra or partial records": "ndef-record-count",
+        "NDEF record was not a URI": "ndef-record-type",
+        "NDEF URI was not HTTPS": "uri-scheme",
+        "NDEF URI was invalid": "uri-encoding",
+        "Story Sticker URL was invalid": "story-url",
+    }.get(str(exc), "unclassified")
+
+
 def _read_type2_tlv_memory(pn532: Any) -> bytes:
     cc = _read_ntag_page(pn532, _NTAG_CC_PAGE)
     if (
@@ -283,13 +323,19 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
 
 
 def _read_ntag_page(pn532: Any, page: int) -> bytes:
-    block = pn532.ntag2xx_read_block(page)
-    if block is None:
-        raise ValueError("NTAG page could not be read")
-    value = bytes(block)
-    if len(value) != _NTAG_PAGE_BYTES:
+    wrong_size = False
+    for attempt in range(_NTAG_PAGE_READ_ATTEMPTS):
+        block = pn532.ntag2xx_read_block(page)
+        if block is not None:
+            value = bytes(block)
+            if len(value) == _NTAG_PAGE_BYTES:
+                return value
+            wrong_size = True
+        if attempt + 1 < _NTAG_PAGE_READ_ATTEMPTS:
+            time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
+    if wrong_size:
         raise ValueError("NTAG page had the wrong size")
-    return value
+    raise ValueError("NTAG page could not be read")
 
 
 def _complete_tlv_prefix_end(memory: bytes | bytearray) -> int | None:

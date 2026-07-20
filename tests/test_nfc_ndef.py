@@ -44,11 +44,30 @@ class PN532NDEFReaderTests(unittest.TestCase):
         fake.pages.pop(6)
         reader = _ndef_reader(fake)
 
-        with self.assertRaisesRegex(NFCError, "could not be verified") as raised:
-            reader.read_uid()
+        with patch("magic_box.nfc.time.sleep"):
+            with self.assertRaisesRegex(NFCError, "could not be verified") as raised:
+                reader.read_uid()
 
         self.assertNotIn("04-A1-22-9B", str(raised.exception))
         self.assertNotIn(token, str(raised.exception))
+        self.assertIn("(page-read)", str(raised.exception))
+
+    def test_transient_page_read_failures_retry_without_uid_fallback(self) -> None:
+        token = "retry-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            transient_page_failures={3: 2, 4: 1},
+        )
+        reader = _ndef_reader(fake)
+
+        with patch("magic_box.nfc.time.sleep") as sleep:
+            key = reader.read_uid()
+
+        self.assertEqual(key, story_playback_key_from_token(token))
+        self.assertEqual(fake.page_read_attempts[3], 3)
+        self.assertEqual(fake.page_read_attempts[4], 2)
+        self.assertGreaterEqual(sleep.call_count, 3)
 
     def test_truncated_tlv_without_terminator_fails_closed(self) -> None:
         token = "truncated-token"
@@ -140,6 +159,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertNotIn(token, message)
         self.assertNotIn(url, message)
         self.assertNotIn("04-A1", message)
+        self.assertIn("(story-url)", message)
 
     def test_ordinary_pn532_mode_preserves_uid_identity(self) -> None:
         fake = _FakePN532(uid=b"\x04\xA1\x22\x9B", memory=b"")
@@ -180,6 +200,7 @@ class _FakePN532:
         uid: bytes | None,
         memory: bytes,
         add_terminator: bool = True,
+        transient_page_failures: dict[int, int] | None = None,
     ) -> None:
         if add_terminator and (not memory or memory[-1] != 0xFE):
             memory += b"\xFE"
@@ -194,18 +215,25 @@ class _FakePN532:
             },
         }
         self.read_pages: list[int] = []
+        self.transient_page_failures = dict(transient_page_failures or {})
+        self.page_read_attempts: dict[int, int] = {}
 
     def read_passive_target(self, *, timeout: float) -> bytes | None:
         return self.uid
 
     def ntag2xx_read_block(self, page: int) -> bytes | None:
         self.read_pages.append(page)
+        self.page_read_attempts[page] = self.page_read_attempts.get(page, 0) + 1
+        remaining = self.transient_page_failures.get(page, 0)
+        if remaining > 0:
+            self.transient_page_failures[page] = remaining - 1
+            return None
         return self.pages.get(page)
 
 
 def _ndef_reader(fake: _FakePN532) -> PN532NDEFReader:
     with patch("magic_box.nfc._open_pn532_spi", return_value=fake):
-        return PN532NDEFReader()
+        return PN532NDEFReader(selection_settle_seconds=0)
 
 
 def _uri_record(url: str, *, header: int = 0xD1, prefix_code: int = 0x04) -> bytes:
