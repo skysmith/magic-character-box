@@ -7,21 +7,23 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from magic_box.app import _handle_service_stop, main
-from magic_box.nfc import PN532NDEFReader, story_playback_key_from_token
+from magic_box.config import story_locator_lookup_key
+from magic_box.nfc import PN532NDEFReader
 
 
 ORIGIN = "https://tap.getstorydock.com"
 
 
 class StoryStickerPlaybackPipelineTests(unittest.TestCase):
-    def test_ndef_url_selects_manifest_audio_after_transient_page_failures(self) -> None:
-        """Exercise NDEF read, URL identity, Manifest lookup, and playback selection."""
-        token = "synthetic-integration-sticker"
-        playback_key = story_playback_key_from_token(token)
+    def test_v2_locator_window_selects_manifest_audio_after_transient_read_failures(self) -> None:
+        """Exercise V2 one-window identity, Manifest lookup, and playback selection."""
+        playback_key = story_locator_lookup_key("SD03-0001", "ABCD")
         fake_pn532 = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
-            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
-            transient_page_failures={4: 2, 3: 1},
+            memory=_type2_memory(
+                _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.synthetic-private-token")
+            ),
+            transient_page_failures={11: 2},
         )
         with patch("magic_box.nfc._open_pn532_spi", return_value=fake_pn532):
             ndef_reader = PN532NDEFReader()
@@ -93,9 +95,8 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             character_name="URL-selected memory",
             source="playback",
         )
-        self.assertEqual(fake_pn532.page_read_attempts[4], 3)
-        self.assertEqual(fake_pn532.page_read_attempts[3], 2)
-        self.assertEqual(fake_pn532.selection_attempts, 4)
+        self.assertEqual(fake_pn532.page_read_attempts, {11: 3})
+        self.assertEqual(fake_pn532.selection_attempts, 3)
 
 
 class _OneNDEFTagThenTerminateReader:
@@ -119,7 +120,7 @@ class _FakePN532:
         memory: bytes,
         transient_page_failures: dict[int, int],
     ) -> None:
-        data_units = max(1, math.ceil(len(memory) / 8))
+        data_units = max(18, math.ceil(len(memory) / 8))
         padded = memory.ljust(data_units * 8, b"\x00")
         self.uid = uid
         self.pages = {
@@ -137,13 +138,16 @@ class _FakePN532:
         self.selection_attempts += 1
         return self.uid
 
-    def ntag2xx_read_block(self, page: int) -> bytes | None:
+    def mifare_classic_read_block(self, page: int) -> bytes | None:
         self.page_read_attempts[page] = self.page_read_attempts.get(page, 0) + 1
         remaining = self.transient_page_failures.get(page, 0)
         if remaining:
             self.transient_page_failures[page] = remaining - 1
             return None
-        return self.pages.get(page)
+        pages = [self.pages.get(page + offset) for offset in range(4)]
+        if any(value is None for value in pages):
+            return None
+        return b"".join(value for value in pages if value is not None)
 
 
 def _uri_record(url: str) -> bytes:

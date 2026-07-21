@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-import logging
 import os
 from pathlib import Path
 import re
@@ -12,10 +11,7 @@ import time
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from .config import normalize_uid
-
-
-LOGGER = logging.getLogger(__name__)
+from .config import normalize_uid, story_locator_lookup_key
 
 
 STORY_STICKER_ORIGIN = "https://tap.getstorydock.com"
@@ -24,6 +20,8 @@ STORY_PLAYBACK_KEY_DOMAIN = b"story-dock-playback-v1\0"
 _NTAG_CC_PAGE = 3
 _NTAG_USER_START_PAGE = 4
 _NTAG_PAGE_BYTES = 4
+_NTAG_READ_WINDOW_BYTES = 16
+_NTAG_READ_WINDOW_PAGES = _NTAG_READ_WINDOW_BYTES // _NTAG_PAGE_BYTES
 _MAX_NTAG_DATA_AREA_BYTES = 872  # NTAG216; NTAG213/215 are smaller.
 _TYPE2_MAGIC = 0xE1
 _TYPE2_NDEF_TLV = 0x03
@@ -34,9 +32,16 @@ _TYPE2_MEMORY_CONTROL_TLV = 0x02
 _NDEF_TNF_WELL_KNOWN = 0x01
 _NDEF_URI_TYPE = b"U"
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
-_NTAG_PAGE_READ_ATTEMPTS = 10
+_STORY_V2_FAST_PATH_PAGE = 11
+_STORY_V2_FAST_WINDOW_RE = re.compile(
+    rb"s/([A-Z0-9]{4}-[0-9]{4})#([A-Z2-7]{4})\Z"
+)
+_NTAG_PAGE_READ_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
+_PN532_COMMAND_RF_CONFIGURATION = 0x32
+_PN532_RF_CONFIG_MAX_COMMUNICATION_RETRIES = 0x04
+_PN532_TYPE2_COMMUNICATION_RETRIES = 3
 
 # NFC Forum URI RTD identifier codes. Story Sticker URLs only accept the
 # no-prefix form or HTTPS forms; HTTP and every non-web scheme fail closed.
@@ -121,7 +126,7 @@ class TriggerFileNFCReader:
         return normalize_uid(uid) if uid else None
 
 
-def _open_pn532_spi() -> Any:
+def _open_pn532_spi(*, type2_retries: bool = False) -> Any:
     try:
         import board
         import busio
@@ -137,9 +142,25 @@ def _open_pn532_spi() -> Any:
         cs_pin = digitalio.DigitalInOut(board.D8)
         pn532 = PN532_SPI(spi, cs_pin, debug=False)
         pn532.SAM_configuration()
+        if type2_retries:
+            _configure_pn532_communication_retries(pn532)
         return pn532
     except Exception as exc:  # Hardware libraries raise board-specific errors.
         raise NFCError(f"Could not initialize PN532 over SPI: {exc}") from exc
+
+
+def _configure_pn532_communication_retries(pn532: Any) -> None:
+    """Retry a short RF exchange inside the PN532 before it drops the target."""
+
+    response = pn532.call_function(
+        _PN532_COMMAND_RF_CONFIGURATION,
+        params=[
+            _PN532_RF_CONFIG_MAX_COMMUNICATION_RETRIES,
+            _PN532_TYPE2_COMMUNICATION_RETRIES,
+        ],
+    )
+    if response is None:
+        raise NFCError("Could not configure PN532 communication retries.")
 
 
 class PN532SPIReader:
@@ -161,10 +182,12 @@ class PN532SPIReader:
 
 
 class PN532NDEFReader:
-    """Hosted Story Sticker reader whose identity comes only from its NDEF URL.
+    """Hosted reader whose identity comes only from Story Sticker URL data.
 
-    The physical UID is used only by the PN532 to select a present tag. It is
-    never returned as identity and is never a fallback when URL parsing fails.
+    Canonical V2 tags expose their locator and row-pairing verifier in one
+    fixed Type 2 READ window. A readable non-V2 window falls back to strict
+    full-NDEF V1 parsing. The physical UID is never playback identity and is
+    never accepted as a fallback.
     """
 
     def __init__(
@@ -176,7 +199,7 @@ class PN532NDEFReader:
         _require_https_origin(expected_origin)
         self.timeout = timeout
         self.expected_origin = expected_origin
-        self._pn532 = _open_pn532_spi()
+        self._pn532 = _open_pn532_spi(type2_retries=True)
 
     def read_uid(self) -> str | None:
         try:
@@ -188,6 +211,14 @@ class PN532NDEFReader:
             return None
 
         try:
+            fast_window = _read_ntag_window(self._pn532, _STORY_V2_FAST_PATH_PAGE)
+            fast_key = _story_v2_key_from_fast_window(fast_window)
+            if fast_key is not None:
+                return fast_key
+
+            # A window that was readable but does not exactly match V2 may be
+            # a legacy V1 sticker. Only that case is allowed to pay for and
+            # trust a complete NDEF parse.
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
@@ -204,6 +235,20 @@ class PN532NDEFReader:
             raise NFCError(
                 f"Story Sticker URL data could not be verified ({reason})."
             ) from None
+
+
+def _story_v2_key_from_fast_window(window: bytes) -> str | None:
+    """Return a V2 locator key only for the exact canonical 16-byte window."""
+
+    match = _STORY_V2_FAST_WINDOW_RE.fullmatch(window)
+    if match is None:
+        return None
+    try:
+        locator = match.group(1).decode("ascii", errors="strict")
+        verifier = match.group(2).decode("ascii", errors="strict")
+    except UnicodeDecodeError:
+        return None
+    return story_locator_lookup_key(locator, verifier)
 
 
 def story_playback_key_from_token(token: str) -> str:
@@ -296,11 +341,12 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
 
 
 def _read_type2_tlv_memory(pn532: Any) -> bytes:
-    # Read the first NDEF user page immediately after selection. This mirrors
+    # Read the first NDEF user window immediately after selection. This mirrors
     # the proven writer/readback order and avoids spending the customer's
-    # short physical tap on a manufacturing-only settle delay.
-    first_user_page = _read_ntag_page(pn532, _NTAG_USER_START_PAGE)
-    cc = _read_ntag_page(pn532, _NTAG_CC_PAGE)
+    # short physical tap on a manufacturing-only settle delay. One Type 2 READ
+    # returns four pages; retain all 16 bytes instead of discarding 12 of them.
+    first_user_window = _read_ntag_window(pn532, _NTAG_USER_START_PAGE)
+    cc = _read_ntag_window(pn532, _NTAG_CC_PAGE)[:_NTAG_PAGE_BYTES]
     if (
         cc[0] != _TYPE2_MAGIC
         or cc[1] >> 4 != 1
@@ -313,28 +359,33 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
     if data_area_bytes > _MAX_NTAG_DATA_AREA_BYTES:
         raise ValueError("Type 2 data area exceeded supported NTAG capacity")
     page_count = (data_area_bytes + _NTAG_PAGE_BYTES - 1) // _NTAG_PAGE_BYTES
-    memory = bytearray(first_user_page)
+    memory = bytearray(first_user_window[:data_area_bytes])
     terminator_end = _complete_tlv_prefix_end(memory)
     if terminator_end is not None:
         return bytes(memory[:terminator_end])
-    for page in range(_NTAG_USER_START_PAGE + 1, _NTAG_USER_START_PAGE + page_count):
-        memory.extend(_read_ntag_page(pn532, page))
+    for page in range(
+        _NTAG_USER_START_PAGE + _NTAG_READ_WINDOW_PAGES,
+        _NTAG_USER_START_PAGE + page_count,
+        _NTAG_READ_WINDOW_PAGES,
+    ):
+        remaining = data_area_bytes - len(memory)
+        memory.extend(_read_ntag_window(pn532, page)[:remaining])
         terminator_end = _complete_tlv_prefix_end(memory)
         if terminator_end is not None:
             return bytes(memory[:terminator_end])
     raise ValueError("Type 2 data did not contain a complete TLV stream")
 
 
-def _read_ntag_page(pn532: Any, page: int) -> bytes:
+def _read_ntag_window(pn532: Any, page: int) -> bytes:
     wrong_size = False
     for attempt in range(_NTAG_PAGE_READ_ATTEMPTS):
         try:
-            block = pn532.ntag2xx_read_block(page)
+            block = pn532.mifare_classic_read_block(page)
         except Exception:
             block = None
         if block is not None:
             value = bytes(block)
-            if len(value) == _NTAG_PAGE_BYTES:
+            if len(value) == _NTAG_READ_WINDOW_BYTES:
                 return value
             wrong_size = True
         if attempt + 1 < _NTAG_PAGE_READ_ATTEMPTS:

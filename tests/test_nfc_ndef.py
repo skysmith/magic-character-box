@@ -1,11 +1,15 @@
 import math
+import sys
+from types import ModuleType
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from magic_box.config import story_locator_lookup_key
 from magic_box.nfc import (
     NFCError,
     PN532NDEFReader,
     PN532SPIReader,
+    _configure_pn532_communication_retries,
     create_reader,
     story_playback_key_from_token,
     story_playback_key_from_url,
@@ -16,6 +20,39 @@ ORIGIN = "https://tap.getstorydock.com"
 
 
 class PN532NDEFReaderTests(unittest.TestCase):
+    def test_configures_three_pn532_native_communication_retries(self) -> None:
+        fake = _FakeRFConfiguration(response=b"")
+
+        _configure_pn532_communication_retries(fake)
+
+        self.assertEqual(fake.calls, [(0x32, [0x04, 0x03])])
+
+    def test_rejects_missing_pn532_retry_configuration_response(self) -> None:
+        fake = _FakeRFConfiguration(response=None)
+
+        with self.assertRaisesRegex(NFCError, "communication retries"):
+            _configure_pn532_communication_retries(fake)
+
+    def test_uid_reader_does_not_call_hosted_rf_retry_configuration(self) -> None:
+        fake_hardware = MagicMock()
+
+        with patch.dict(sys.modules, _fake_pn532_modules(fake_hardware)), patch(
+            "magic_box.nfc._configure_pn532_communication_retries"
+        ) as configure_retries:
+            reader = PN532SPIReader()
+
+        self.assertIs(reader._pn532, fake_hardware)
+        fake_hardware.SAM_configuration.assert_called_once_with()
+        configure_retries.assert_not_called()
+
+    def test_ndef_reader_explicitly_enables_hosted_type2_retries(self) -> None:
+        fake = _FakePN532(uid=None, memory=b"")
+
+        with patch("magic_box.nfc._open_pn532_spi", return_value=fake) as open_reader:
+            PN532NDEFReader()
+
+        open_reader.assert_called_once_with(type2_retries=True)
+
     def test_valid_multi_page_ndef_url_returns_domain_separated_opaque_key(self) -> None:
         token = "alpha_token-123"
         fake = _FakePN532(uid=b"\x04\xA1\x22\x9B", memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")))
@@ -27,9 +64,92 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key,
             "sdpk1_9a1a0b2715b28494d7c368b315a9aaf0d359124421d51a50cdd403f10d98d424",
         )
-        self.assertGreater(len(fake.read_pages), 4)
-        self.assertEqual(fake.read_pages[:2], [4, 3])
+        self.assertEqual(fake.read_pages[:3], [11, 4, 3])
+        self.assertLessEqual(len(fake.read_pages), 6)
         self.assertNotIn(token, key or "")
+
+    def test_v2_url_returns_locator_key_from_exactly_one_page_11_window(self) -> None:
+        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        fake = _FakePN532(uid=b"\x04\xA1\x22\x9B", memory=_type2_memory(_uri_record(url)))
+
+        key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
+        self.assertEqual(fake.read_pages, [11])
+        self.assertEqual(fake.selection_attempts, 1)
+        self.assertNotIn("private-token", key or "")
+
+    def test_v2_fast_window_position_is_independent_of_private_token_length(self) -> None:
+        for private_token in ("x", "short-token", "x" * 128):
+            with self.subTest(length=len(private_token)):
+                url = f"{ORIGIN}/s/SD03-0001#WXYZ.{private_token}"
+                fake = _FakePN532(uid=b"\x04\xA1", memory=_type2_memory(_uri_record(url)))
+
+                self.assertEqual(
+                    _ndef_reader(fake).read_uid(),
+                    story_locator_lookup_key("SD03-0001", "WXYZ"),
+                )
+                self.assertEqual(fake.read_pages, [11])
+
+    def test_v2_fast_window_retries_are_bounded_and_never_use_uid(self) -> None:
+        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(_uri_record(url)),
+            transient_page_failures={11: 2},
+        )
+
+        with patch("magic_box.nfc.time.sleep") as sleep:
+            key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
+        self.assertEqual(fake.read_pages, [11, 11, 11])
+        self.assertEqual(fake.selection_attempts, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_v2_wrong_size_window_fails_closed_with_value_free_reason(self) -> None:
+        private_token = "must-never-appear"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(
+                _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.{private_token}")
+            ),
+        )
+        fake.mifare_classic_read_block = MagicMock(return_value=b"short")
+
+        with patch("magic_box.nfc.time.sleep"):
+            with self.assertRaisesRegex(NFCError, r"\(page-size\)") as raised:
+                _ndef_reader(fake).read_uid()
+
+        self.assertEqual(fake.mifare_classic_read_block.call_count, 3)
+        self.assertNotIn("04-A1", str(raised.exception))
+        self.assertNotIn(private_token, str(raised.exception))
+
+    def test_unreadable_v2_window_does_not_attempt_full_ndef_or_uid_fallback(self) -> None:
+        token = "legacy-url-would-otherwise-be-valid"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            transient_page_failures={11: 3},
+        )
+
+        with patch("magic_box.nfc.time.sleep"):
+            with self.assertRaisesRegex(NFCError, r"\(page-read\)") as raised:
+                _ndef_reader(fake).read_uid()
+
+        self.assertEqual(fake.read_pages, [11, 11, 11])
+        self.assertNotIn("04-A1", str(raised.exception))
+        self.assertNotIn(token, str(raised.exception))
+
+    def test_readable_non_v2_window_uses_strict_v1_full_ndef_fallback(self) -> None:
+        token = "legacy-fallback-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+        )
+
+        self.assertEqual(_ndef_reader(fake).read_uid(), story_playback_key_from_token(token))
+        self.assertEqual(fake.read_pages[:3], [11, 4, 3])
 
     def test_no_tag_returns_none_without_reading_memory(self) -> None:
         fake = _FakePN532(uid=None, memory=b"")
@@ -142,6 +262,60 @@ class PN532NDEFReaderTests(unittest.TestCase):
                     _ndef_reader(fake).read_uid()
                 self.assertNotIn(url, str(raised.exception))
 
+    def test_noncanonical_v2_locator_or_verifier_fails_closed(self) -> None:
+        invalid_urls = (
+            f"{ORIGIN}/s/SD3-0001#ABCD.private-token",
+            f"{ORIGIN}/s/SD03-001#ABCD.private-token",
+            f"{ORIGIN}/s/sd03-0001#ABCD.private-token",
+            f"{ORIGIN}/s/SD03-0001#ABC1.private-token",
+            f"{ORIGIN}/s/SD03-0001#abcD.private-token",
+            f"{ORIGIN}/s/SD03-0001/ABCD#private-token",
+        )
+
+        for url in invalid_urls:
+            with self.subTest(url=url):
+                fake = _FakePN532(uid=b"\x04\xA1", memory=_type2_memory(_uri_record(url)))
+                with self.assertRaises(NFCError) as raised:
+                    _ndef_reader(fake).read_uid()
+                self.assertNotIn(url, str(raised.exception))
+                self.assertNotIn("private-token", str(raised.exception))
+
+    def test_shifted_v2_bytes_do_not_match_fixed_window(self) -> None:
+        # The no-prefix URI encoding shifts the otherwise canonical text. It
+        # must not be accepted through a substring search or variable scan.
+        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1",
+            memory=_type2_memory(_uri_record(url, prefix_code=0x00)),
+        )
+
+        with self.assertRaises(NFCError):
+            _ndef_reader(fake).read_uid()
+
+        self.assertGreater(len(fake.read_pages), 1)
+
+    def test_v2_identity_uses_both_full_locator_and_verifier_not_uid(self) -> None:
+        uid = b"\x04\xA1\x22\x9B"
+        identities = []
+        for locator, verifier in (
+            ("SD03-0001", "ABCD"),
+            ("SD03-0002", "ABCD"),
+            ("SD03-0001", "WXYZ"),
+        ):
+            url = f"{ORIGIN}/s/{locator}#{verifier}.private-token"
+            identities.append(
+                _ndef_reader(_FakePN532(uid=uid, memory=_type2_memory(_uri_record(url)))).read_uid()
+            )
+
+        self.assertEqual(len(set(identities)), 3)
+
+        shared = _type2_memory(
+            _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.private-token")
+        )
+        first = _ndef_reader(_FakePN532(uid=b"\x04\xA1", memory=shared)).read_uid()
+        second = _ndef_reader(_FakePN532(uid=b"\x04\xB2", memory=shared)).read_uid()
+        self.assertEqual(first, second)
+
     def test_same_uid_different_urls_have_different_identity(self) -> None:
         uid = b"\x04\xA1\x22\x9B"
         first = _ndef_reader(
@@ -218,7 +392,9 @@ class _FakePN532:
     ) -> None:
         if add_terminator and (not memory or memory[-1] != 0xFE):
             memory += b"\xFE"
-        data_units = max(1, math.ceil(len(memory) / 8))
+        # Real Story Stickers have at least the NTAG213 144-byte user area,
+        # so page 11 remains readable even for a short V1 message.
+        data_units = max(18, math.ceil(len(memory) / 8))
         padded = memory.ljust(data_units * 8, b"\x00")
         self.uid = uid
         self.pages = {
@@ -237,14 +413,52 @@ class _FakePN532:
         self.selection_attempts += 1
         return self.uid
 
-    def ntag2xx_read_block(self, page: int) -> bytes | None:
+    def mifare_classic_read_block(self, page: int) -> bytes | None:
         self.read_pages.append(page)
         self.page_read_attempts[page] = self.page_read_attempts.get(page, 0) + 1
         remaining = self.transient_page_failures.get(page, 0)
         if remaining > 0:
             self.transient_page_failures[page] = remaining - 1
             return None
-        return self.pages.get(page)
+        pages = [self.pages.get(page + offset) for offset in range(4)]
+        if any(value is None for value in pages):
+            return None
+        return b"".join(value for value in pages if value is not None)
+
+
+class _FakeRFConfiguration:
+    def __init__(self, *, response: bytes | None) -> None:
+        self.response = response
+        self.calls: list[tuple[int, list[int]]] = []
+
+    def call_function(self, command: int, *, params: list[int]) -> bytes | None:
+        self.calls.append((command, params))
+        return self.response
+
+
+def _fake_pn532_modules(fake_hardware: MagicMock) -> dict[str, ModuleType]:
+    board = ModuleType("board")
+    board.SCK = object()  # type: ignore[attr-defined]
+    board.MOSI = object()  # type: ignore[attr-defined]
+    board.MISO = object()  # type: ignore[attr-defined]
+    board.D8 = object()  # type: ignore[attr-defined]
+
+    busio = ModuleType("busio")
+    busio.SPI = MagicMock(return_value=object())  # type: ignore[attr-defined]
+    digitalio = ModuleType("digitalio")
+    digitalio.DigitalInOut = MagicMock(return_value=object())  # type: ignore[attr-defined]
+
+    package = ModuleType("adafruit_pn532")
+    package.__path__ = []  # type: ignore[attr-defined]
+    spi = ModuleType("adafruit_pn532.spi")
+    spi.PN532_SPI = MagicMock(return_value=fake_hardware)  # type: ignore[attr-defined]
+    return {
+        "board": board,
+        "busio": busio,
+        "digitalio": digitalio,
+        "adafruit_pn532": package,
+        "adafruit_pn532.spi": spi,
+    }
 
 
 def _ndef_reader(fake: _FakePN532) -> PN532NDEFReader:

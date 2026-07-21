@@ -12,6 +12,9 @@ import unicodedata
 
 VALID_MODES = {"first", "shuffle", "sequence"}
 STORY_PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
+STORY_LOCATOR_RE = re.compile(r"[A-Z0-9]{4}-[0-9]{4}\Z")
+STORY_LOCATOR_VERIFIER_RE = re.compile(r"[A-Z2-7]{4}\Z")
+STORY_LOCATOR_KEY_RE = re.compile(r"sdlk1_[A-Z0-9]{4}-[0-9]{4}_[A-Z2-7]{4}\Z")
 
 
 class ConfigError(Exception):
@@ -41,6 +44,17 @@ def normalize_uid(uid: str) -> str:
             raise ValueError("Playback key must use canonical sdpk1_<64 lowercase hex> form")
         return value
 
+    # V2 Story Stickers expose a short, non-authorizing locator plus a
+    # row-pairing verifier in one fixed Type 2 read window. Keep their
+    # composite lookup keys in a reserved namespace and reject lookalikes
+    # rather than letting maker-mode UID normalization reinterpret them.
+    if value.lower().startswith("sdlk1"):
+        if STORY_LOCATOR_KEY_RE.fullmatch(value) is None:
+            raise ValueError(
+                "Locator key must use canonical sdlk1_<batch>-<number>_<4 base32> form"
+            )
+        return value
+
     value = value.upper()
 
     compact = re.sub(r"[-_\s:]+", "", value)
@@ -49,6 +63,16 @@ def normalize_uid(uid: str) -> str:
         return "-".join(compact[index : index + 2] for index in range(0, len(compact), 2))
 
     return re.sub(r"[-_\s:]+", "-", value).strip("-")
+
+
+def story_locator_lookup_key(locator: str, verifier: str) -> str:
+    """Construct the canonical config key for a V2 Story Sticker locator."""
+
+    if not isinstance(locator, str) or STORY_LOCATOR_RE.fullmatch(locator) is None:
+        raise ValueError("Story Sticker locator was invalid")
+    if not isinstance(verifier, str) or STORY_LOCATOR_VERIFIER_RE.fullmatch(verifier) is None:
+        raise ValueError("Story Sticker locator verifier was invalid")
+    return f"sdlk1_{locator}_{verifier}"
 
 
 class CharacterConfig:
