@@ -153,12 +153,14 @@ class PN532NDEFReaderTests(unittest.TestCase):
             with self.assertRaisesRegex(NFCError, r"\(page-size\)") as raised:
                 _ndef_reader(fake).read_uid()
 
-        self.assertEqual(fake.mifare_classic_read_block.call_count, 3)
+        # Three bounded fast-window attempts, then three bounded full-NDEF
+        # attempts before the same value-free page-size rejection.
+        self.assertEqual(fake.mifare_classic_read_block.call_count, 6)
         self.assertNotIn("04-A1", str(raised.exception))
         self.assertNotIn(private_token, str(raised.exception))
 
-    def test_unreadable_v2_window_does_not_attempt_full_ndef_or_uid_fallback(self) -> None:
-        token = "legacy-url-would-otherwise-be-valid"
+    def test_unreadable_fast_window_uses_strict_legacy_full_ndef_fallback(self) -> None:
+        token = "legacy-url-remains-authoritative"
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
@@ -166,12 +168,26 @@ class PN532NDEFReaderTests(unittest.TestCase):
         )
 
         with patch("magic_box.nfc.time.sleep"):
-            with self.assertRaisesRegex(NFCError, r"\(page-read\)") as raised:
-                _ndef_reader(fake).read_uid()
+            key = _ndef_reader(fake).read_uid()
 
-        self.assertEqual(fake.read_pages, [11, 11, 11])
-        self.assertNotIn("04-A1", str(raised.exception))
-        self.assertNotIn(token, str(raised.exception))
+        self.assertEqual(key, story_playback_key_from_token(token))
+        self.assertEqual(fake.read_pages[:4], [11, 11, 11, 4])
+
+    def test_unreadable_fast_window_uses_strict_v2_full_ndef_fallback(self) -> None:
+        private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(
+                _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
+            ),
+            transient_page_failures={11: 3},
+        )
+
+        with patch("magic_box.nfc.time.sleep"):
+            key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
+        self.assertEqual(fake.read_pages[:4], [11, 11, 11, 4])
 
     def test_readable_non_v2_window_uses_strict_v1_full_ndef_fallback(self) -> None:
         token = "legacy-fallback-token"
@@ -374,18 +390,19 @@ class PN532NDEFReaderTests(unittest.TestCase):
                 self.assertNotIn(url, str(raised.exception))
                 self.assertNotIn("ABCD", str(raised.exception))
 
-    def test_shifted_v2_bytes_do_not_match_fixed_window(self) -> None:
+    def test_shifted_v2_bytes_use_complete_url_fallback_not_substring_matching(self) -> None:
         # The no-prefix URI encoding shifts the otherwise canonical text. It
-        # must not be accepted through a substring search or variable scan.
+        # must not be accepted through a substring search or variable scan,
+        # but the exact complete NDEF URL remains an authoritative fallback.
         url = f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         fake = _FakePN532(
             uid=b"\x04\xA1",
             memory=_type2_memory(_uri_record(url, prefix_code=0x00)),
         )
 
-        with self.assertRaises(NFCError):
-            _ndef_reader(fake).read_uid()
+        key = _ndef_reader(fake).read_uid()
 
+        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
         self.assertGreater(len(fake.read_pages), 1)
 
     def test_v2_identity_uses_both_full_locator_and_token_prefix_not_uid(self) -> None:
@@ -472,6 +489,14 @@ class StoryPlaybackKeyTests(unittest.TestCase):
         self.assertEqual(
             story_playback_key_from_url(f"{ORIGIN}/s/alpha_token-123"),
             story_playback_key_from_token("alpha_token-123"),
+        )
+
+    def test_url_derivation_accepts_canonical_v2_path(self) -> None:
+        self.assertEqual(
+            story_playback_key_from_url(
+                f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+            ),
+            story_locator_lookup_key("SD03-0001", "ABCD"),
         )
 
 

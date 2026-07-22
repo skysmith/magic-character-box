@@ -39,6 +39,9 @@ _TYPE2_MEMORY_CONTROL_TLV = 0x02
 _NDEF_TNF_WELL_KNOWN = 0x01
 _NDEF_URI_TYPE = b"U"
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
+_STORY_V2_PATH_RE = re.compile(
+    r"/s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{32})\Z"
+)
 _STORY_V2_FAST_PATH_PAGE = 11
 _STORY_V2_FAST_WINDOW_RE = re.compile(
     rb"s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{4})\Z"
@@ -279,15 +282,22 @@ class PN532NDEFReader:
             return cached_key
 
         try:
-            fast_window = _read_ntag_window(self._pn532, _STORY_V2_FAST_PATH_PAGE)
-            fast_key = _story_v2_key_from_fast_window(fast_window)
-            if fast_key is not None:
-                return fast_key
+            try:
+                fast_window = _read_ntag_window(self._pn532, _STORY_V2_FAST_PATH_PAGE)
+            except ValueError:
+                # The shortcut is an optimization, not a new authority model.
+                # A transient failure at page 11 must still allow the exact
+                # complete NDEF URL to prove either a legacy or V2 identity.
+                fast_window = None
+            if fast_window is not None:
+                fast_key = _story_v2_key_from_fast_window(fast_window)
+                if fast_key is not None:
+                    return fast_key
 
             # A window that was readable but does not exactly match the
-            # shortcut contract may be
-            # a legacy V1 sticker. Only that case is allowed to pay for and
-            # trust a complete NDEF parse.
+            # shortcut contract may be a legacy V1 sticker. An unreadable fast
+            # window may also be a transient transport failure. In either case,
+            # only a strict complete NDEF parse is allowed to recover.
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
@@ -445,10 +455,14 @@ def story_playback_key_from_url(
     if parsed.query or parsed.fragment:
         raise ValueError("Story Sticker URL was invalid")
 
-    match = _STORY_PATH_RE.fullmatch(parsed.path)
-    if match is None:
-        raise ValueError("Story Sticker URL was invalid")
-    return story_playback_key_from_token(match.group(1))
+    v2_match = _STORY_V2_PATH_RE.fullmatch(parsed.path)
+    if v2_match is not None:
+        return story_locator_lookup_key(v2_match.group(1), v2_match.group(2)[:4])
+
+    v1_match = _STORY_PATH_RE.fullmatch(parsed.path)
+    if v1_match is not None:
+        return story_playback_key_from_token(v1_match.group(1))
+    raise ValueError("Story Sticker URL was invalid")
 
 
 def _require_https_origin(origin: str) -> None:
