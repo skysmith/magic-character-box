@@ -39,16 +39,17 @@ class ConfigTests(unittest.TestCase):
     def test_constructs_and_preserves_canonical_story_locator_key(self) -> None:
         key = story_locator_lookup_key("SD03-0001", "ABCD")
 
-        self.assertEqual(key, "sdlk1_SD03-0001_ABCD")
+        self.assertEqual(key, "sdlk2_SD03-0001_ABCD")
         self.assertEqual(normalize_uid(key), key)
 
     def test_locator_key_constructor_rejects_noncanonical_components(self) -> None:
         invalid = (
             ("SD3-0001", "ABCD"),
             ("SD03-001", "ABCD"),
+            ("SD03-0000", "ABCD"),
             ("sd03-0001", "ABCD"),
-            ("SD03-0001", "ABC1"),
-            ("SD03-0001", "abcD"),
+            ("SD03-0001", "ABC!"),
+            ("SD03-0001", "ABC"),
             ("SD03-0001", "ABCD "),
         )
 
@@ -58,11 +59,12 @@ class ConfigTests(unittest.TestCase):
 
     def test_malformed_story_locator_key_is_rejected_not_normalized_as_uid(self) -> None:
         malformed = (
-            "SDLK1_SD03-0001_ABCD",
-            "sdlk1_SD03-0001_ABC1",
-            "sdlk1_sd03-0001_ABCD",
-            "sdlk1_SD03-0001_ABCD_extra",
-            "sdlk1-SD03-0001-ABCD",
+            "SDLK2_SD03-0001_ABCD",
+            "sdlk2_SD03-0001_ABC!",
+            "sdlk2_SD03-0000_ABCD",
+            "sdlk2_sd03-0001_ABCD",
+            "sdlk2_SD03-0001_ABCD_extra",
+            "sdlk2-SD03-0001-ABCD",
         )
 
         for key in malformed:

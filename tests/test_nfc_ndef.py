@@ -69,7 +69,8 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertNotIn(token, key or "")
 
     def test_v2_url_returns_locator_key_from_exactly_one_page_11_window(self) -> None:
-        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        url = f"{ORIGIN}/s/SD03-0001/{private_token}"
         fake = _FakePN532(uid=b"\x04\xA1\x22\x9B", memory=_type2_memory(_uri_record(url)))
 
         key = _ndef_reader(fake).read_uid()
@@ -77,22 +78,25 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
         self.assertEqual(fake.read_pages, [11])
         self.assertEqual(fake.selection_attempts, 1)
-        self.assertNotIn("private-token", key or "")
+        self.assertNotIn(private_token, key or "")
 
-    def test_v2_fast_window_position_is_independent_of_private_token_length(self) -> None:
-        for private_token in ("x", "short-token", "x" * 128):
-            with self.subTest(length=len(private_token)):
-                url = f"{ORIGIN}/s/SD03-0001#WXYZ.{private_token}"
+    def test_v2_fast_window_uses_exact_case_sensitive_token_prefix(self) -> None:
+        for private_token in (
+            "WXYZ" + "x" * 28,
+            "a-_2" + "y" * 28,
+        ):
+            with self.subTest(prefix=private_token[:4]):
+                url = f"{ORIGIN}/s/SD03-0001/{private_token}"
                 fake = _FakePN532(uid=b"\x04\xA1", memory=_type2_memory(_uri_record(url)))
 
                 self.assertEqual(
                     _ndef_reader(fake).read_uid(),
-                    story_locator_lookup_key("SD03-0001", "WXYZ"),
+                    story_locator_lookup_key("SD03-0001", private_token[:4]),
                 )
                 self.assertEqual(fake.read_pages, [11])
 
     def test_v2_fast_window_retries_are_bounded_and_never_use_uid(self) -> None:
-        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        url = f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(_uri_record(url)),
@@ -108,11 +112,11 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 2)
 
     def test_v2_wrong_size_window_fails_closed_with_value_free_reason(self) -> None:
-        private_token = "must-never-appear"
+        private_token = "mustneverappearxxxxxxxxxxxxxxxxx"
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
-                _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.{private_token}")
+                _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
             ),
         )
         fake.mifare_classic_read_block = MagicMock(return_value=b"short")
@@ -262,14 +266,14 @@ class PN532NDEFReaderTests(unittest.TestCase):
                     _ndef_reader(fake).read_uid()
                 self.assertNotIn(url, str(raised.exception))
 
-    def test_noncanonical_v2_locator_or_verifier_fails_closed(self) -> None:
+    def test_noncanonical_v2_locator_or_token_prefix_fails_closed(self) -> None:
         invalid_urls = (
-            f"{ORIGIN}/s/SD3-0001#ABCD.private-token",
-            f"{ORIGIN}/s/SD03-001#ABCD.private-token",
-            f"{ORIGIN}/s/sd03-0001#ABCD.private-token",
-            f"{ORIGIN}/s/SD03-0001#ABC1.private-token",
-            f"{ORIGIN}/s/SD03-0001#abcD.private-token",
-            f"{ORIGIN}/s/SD03-0001/ABCD#private-token",
+            f"{ORIGIN}/s/SD3-0001/ABCD" + "x" * 28,
+            f"{ORIGIN}/s/SD03-001/ABCD" + "x" * 28,
+            f"{ORIGIN}/s/SD03-0000/ABCD" + "x" * 28,
+            f"{ORIGIN}/s/sd03-0001/ABCD" + "x" * 28,
+            f"{ORIGIN}/s/SD03-0001/ABC!" + "x" * 28,
+            f"{ORIGIN}/s/SD03-0001/ABC",
         )
 
         for url in invalid_urls:
@@ -278,12 +282,12 @@ class PN532NDEFReaderTests(unittest.TestCase):
                 with self.assertRaises(NFCError) as raised:
                     _ndef_reader(fake).read_uid()
                 self.assertNotIn(url, str(raised.exception))
-                self.assertNotIn("private-token", str(raised.exception))
+                self.assertNotIn("ABCD", str(raised.exception))
 
     def test_shifted_v2_bytes_do_not_match_fixed_window(self) -> None:
         # The no-prefix URI encoding shifts the otherwise canonical text. It
         # must not be accepted through a substring search or variable scan.
-        url = f"{ORIGIN}/s/SD03-0001#ABCD.private-token"
+        url = f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         fake = _FakePN532(
             uid=b"\x04\xA1",
             memory=_type2_memory(_uri_record(url, prefix_code=0x00)),
@@ -294,15 +298,15 @@ class PN532NDEFReaderTests(unittest.TestCase):
 
         self.assertGreater(len(fake.read_pages), 1)
 
-    def test_v2_identity_uses_both_full_locator_and_verifier_not_uid(self) -> None:
+    def test_v2_identity_uses_both_full_locator_and_token_prefix_not_uid(self) -> None:
         uid = b"\x04\xA1\x22\x9B"
         identities = []
-        for locator, verifier in (
+        for locator, token_prefix in (
             ("SD03-0001", "ABCD"),
             ("SD03-0002", "ABCD"),
-            ("SD03-0001", "WXYZ"),
+            ("SD03-0001", "a-_2"),
         ):
-            url = f"{ORIGIN}/s/{locator}#{verifier}.private-token"
+            url = f"{ORIGIN}/s/{locator}/{token_prefix}" + "x" * 28
             identities.append(
                 _ndef_reader(_FakePN532(uid=uid, memory=_type2_memory(_uri_record(url)))).read_uid()
             )
@@ -310,7 +314,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(len(set(identities)), 3)
 
         shared = _type2_memory(
-            _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.private-token")
+            _uri_record(f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef")
         )
         first = _ndef_reader(_FakePN532(uid=b"\x04\xA1", memory=shared)).read_uid()
         second = _ndef_reader(_FakePN532(uid=b"\x04\xB2", memory=shared)).read_uid()

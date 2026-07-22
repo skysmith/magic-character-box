@@ -21,7 +21,10 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
         fake_pn532 = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
-                _uri_record(f"{ORIGIN}/s/SD03-0001#ABCD.synthetic-private-token")
+                _uri_record(
+                    f"{ORIGIN}/s/SD03-0001/"
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+                )
             ),
             transient_page_failures={11: 2},
         )

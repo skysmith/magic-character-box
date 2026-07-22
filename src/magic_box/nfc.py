@@ -34,7 +34,7 @@ _NDEF_URI_TYPE = b"U"
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
 _STORY_V2_FAST_PATH_PAGE = 11
 _STORY_V2_FAST_WINDOW_RE = re.compile(
-    rb"s/([A-Z0-9]{4}-[0-9]{4})#([A-Z2-7]{4})\Z"
+    rb"s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{4})\Z"
 )
 _NTAG_PAGE_READ_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
@@ -184,7 +184,7 @@ class PN532SPIReader:
 class PN532NDEFReader:
     """Hosted reader whose identity comes only from Story Sticker URL data.
 
-    Canonical V2 tags expose their locator and row-pairing verifier in one
+    Shortcut tags expose their locator and first four token characters in one
     fixed Type 2 READ window. A readable non-V2 window falls back to strict
     full-NDEF V1 parsing. The physical UID is never playback identity and is
     never accepted as a fallback.
@@ -216,7 +216,8 @@ class PN532NDEFReader:
             if fast_key is not None:
                 return fast_key
 
-            # A window that was readable but does not exactly match V2 may be
+            # A window that was readable but does not exactly match the
+            # shortcut contract may be
             # a legacy V1 sticker. Only that case is allowed to pay for and
             # trust a complete NDEF parse.
             type2_memory = _read_type2_tlv_memory(self._pn532)
@@ -238,17 +239,17 @@ class PN532NDEFReader:
 
 
 def _story_v2_key_from_fast_window(window: bytes) -> str | None:
-    """Return a V2 locator key only for the exact canonical 16-byte window."""
+    """Return a shortcut key only for the exact canonical 16-byte window."""
 
     match = _STORY_V2_FAST_WINDOW_RE.fullmatch(window)
     if match is None:
         return None
     try:
         locator = match.group(1).decode("ascii", errors="strict")
-        verifier = match.group(2).decode("ascii", errors="strict")
+        token_prefix = match.group(2).decode("ascii", errors="strict")
     except UnicodeDecodeError:
         return None
-    return story_locator_lookup_key(locator, verifier)
+    return story_locator_lookup_key(locator, token_prefix)
 
 
 def story_playback_key_from_token(token: str) -> str:
