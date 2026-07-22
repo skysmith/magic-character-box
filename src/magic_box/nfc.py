@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
+import logging
 import os
 from pathlib import Path
 import re
+import tempfile
 import time
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -14,8 +17,12 @@ from urllib.parse import urlsplit
 from .config import normalize_uid, story_locator_lookup_key
 
 
+LOGGER = logging.getLogger(__name__)
+
+
 STORY_STICKER_ORIGIN = "https://tap.getstorydock.com"
 STORY_PLAYBACK_KEY_DOMAIN = b"story-dock-playback-v1\0"
+STORY_UID_CACHE_KEY_DOMAIN = b"story-dock-physical-uid-cache-v1\0"
 
 _NTAG_CC_PAGE = 3
 _NTAG_USER_START_PAGE = 4
@@ -36,12 +43,21 @@ _STORY_V2_FAST_PATH_PAGE = 11
 _STORY_V2_FAST_WINDOW_RE = re.compile(
     rb"s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{4})\Z"
 )
+_PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
+_UID_CACHE_KEY_RE = re.compile(r"sduid1_[0-9a-f]{64}\Z")
+_UID_CACHE_MAX_ENTRIES = 10_000
 _NTAG_PAGE_READ_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
 _PN532_COMMAND_RF_CONFIGURATION = 0x32
+_PN532_COMMAND_READ_REGISTER = 0x06
+_PN532_COMMAND_WRITE_REGISTER = 0x08
+_PN532_RF_CONFIG_RF_FIELD = 0x01
 _PN532_RF_CONFIG_MAX_COMMUNICATION_RETRIES = 0x04
 _PN532_TYPE2_COMMUNICATION_RETRIES = 3
+_PN532_CIU_RF_CONFIG_REGISTER = (0x63, 0x16)
+_PN532_RECEIVER_GAIN_MASK = 0x70
+_PN532_TYPE2_CLOSE_CONTACT_GAIN = 0x70
 
 # NFC Forum URI RTD identifier codes. Story Sticker URLs only accept the
 # no-prefix form or HTTPS forms; HTTP and every non-web scheme fail closed.
@@ -126,7 +142,7 @@ class TriggerFileNFCReader:
         return normalize_uid(uid) if uid else None
 
 
-def _open_pn532_spi(*, type2_retries: bool = False) -> Any:
+def _open_pn532_spi(*, type2_receiver: bool = False) -> Any:
     try:
         import board
         import busio
@@ -142,8 +158,9 @@ def _open_pn532_spi(*, type2_retries: bool = False) -> Any:
         cs_pin = digitalio.DigitalInOut(board.D8)
         pn532 = PN532_SPI(spi, cs_pin, debug=False)
         pn532.SAM_configuration()
-        if type2_retries:
+        if type2_receiver:
             _configure_pn532_communication_retries(pn532)
+            _configure_pn532_type2_receiver_gain(pn532)
         return pn532
     except Exception as exc:  # Hardware libraries raise board-specific errors.
         raise NFCError(f"Could not initialize PN532 over SPI: {exc}") from exc
@@ -161,6 +178,47 @@ def _configure_pn532_communication_retries(pn532: Any) -> None:
     )
     if response is None:
         raise NFCError("Could not configure PN532 communication retries.")
+
+
+def _configure_pn532_type2_receiver_gain(pn532: Any) -> None:
+    """Match the close-contact receiver profile proven on the founder dock."""
+
+    current = pn532.call_function(
+        _PN532_COMMAND_READ_REGISTER,
+        params=list(_PN532_CIU_RF_CONFIG_REGISTER),
+        response_length=1,
+    )
+    if current is None or len(current) != 1:
+        raise NFCError("Could not read PN532 receiver configuration.")
+    close_contact = (
+        current[0] & ~_PN532_RECEIVER_GAIN_MASK
+    ) | _PN532_TYPE2_CLOSE_CONTACT_GAIN
+
+    field_disabled = pn532.call_function(
+        _PN532_COMMAND_RF_CONFIGURATION,
+        params=[_PN532_RF_CONFIG_RF_FIELD, 0x00],
+    )
+    if field_disabled is None:
+        raise NFCError("Could not disable the PN532 RF field for receiver tuning.")
+
+    write_response: bytes | bytearray | None = None
+    try:
+        write_response = pn532.call_function(
+            _PN532_COMMAND_WRITE_REGISTER,
+            params=[*_PN532_CIU_RF_CONFIG_REGISTER, close_contact],
+        )
+    finally:
+        field_enabled = pn532.call_function(
+            _PN532_COMMAND_RF_CONFIGURATION,
+            params=[_PN532_RF_CONFIG_RF_FIELD, 0x01],
+        )
+
+    if write_response is None:
+        raise NFCError("Could not configure PN532 receiver gain.")
+    if field_enabled is None:
+        raise NFCError("Could not re-enable the PN532 RF field after receiver tuning.")
+
+    time.sleep(0.10)
 
 
 class PN532SPIReader:
@@ -182,12 +240,13 @@ class PN532SPIReader:
 
 
 class PN532NDEFReader:
-    """Hosted reader whose identity comes only from Story Sticker URL data.
+    """Hosted reader whose playback key originates in Story Sticker URL data.
 
     Shortcut tags expose their locator and first four token characters in one
     fixed Type 2 READ window. A readable non-V2 window falls back to strict
-    full-NDEF V1 parsing. The physical UID is never playback identity and is
-    never accepted as a fallback.
+    full-NDEF V1 parsing. Only after an exact legacy URL has been verified may
+    a hashed local UID binding accelerate later taps. The physical UID is never
+    returned as playback identity, and V2 shortcut tags never enter that cache.
     """
 
     def __init__(
@@ -195,11 +254,16 @@ class PN532NDEFReader:
         timeout: float = 0.1,
         *,
         expected_origin: str = STORY_STICKER_ORIGIN,
+        uid_cache_path: Path | None = None,
     ) -> None:
         _require_https_origin(expected_origin)
         self.timeout = timeout
         self.expected_origin = expected_origin
-        self._pn532 = _open_pn532_spi(type2_retries=True)
+        if uid_cache_path is None:
+            configured_cache = os.getenv("MAGIC_BOX_NDEF_UID_CACHE", "").strip()
+            uid_cache_path = Path(configured_cache).expanduser() if configured_cache else None
+        self._uid_cache = _NDEFUIDCache(uid_cache_path)
+        self._pn532 = _open_pn532_spi(type2_receiver=True)
 
     def read_uid(self) -> str | None:
         try:
@@ -209,6 +273,10 @@ class PN532NDEFReader:
 
         if tag_present is None:
             return None
+
+        cached_key = self._uid_cache.lookup(tag_present)
+        if cached_key is not None:
+            return cached_key
 
         try:
             fast_window = _read_ntag_window(self._pn532, _STORY_V2_FAST_PATH_PAGE)
@@ -223,10 +291,12 @@ class PN532NDEFReader:
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
-            return story_playback_key_from_url(
+            playback_key = story_playback_key_from_url(
                 story_url,
                 expected_origin=self.expected_origin,
             )
+            self._uid_cache.remember(tag_present, playback_key)
+            return playback_key
         except Exception as exc:
             # Do not include the underlying parse error, URL, or token in an
             # exception that the app will log. The bounded reason code is
@@ -236,6 +306,96 @@ class PN532NDEFReader:
             raise NFCError(
                 f"Story Sticker URL data could not be verified ({reason})."
             ) from None
+
+    def invalidate_cached_identity(self, playback_key: str) -> None:
+        """Forget learned legacy bindings that no longer exist in the manifest."""
+
+        self._uid_cache.forget_playback_key(playback_key)
+
+
+class _NDEFUIDCache:
+    """Bounded UID fingerprints learned only after an exact legacy URL read."""
+
+    def __init__(self, path: Path | None) -> None:
+        self.path = path.expanduser().resolve() if path is not None else None
+        self.entries: dict[str, str] = {}
+        self._load()
+
+    def lookup(self, uid: bytes | bytearray) -> str | None:
+        return self.entries.get(_uid_cache_key(uid))
+
+    def remember(self, uid: bytes | bytearray, playback_key: str) -> None:
+        # V2 shortcut keys deliberately do not enter the UID cache. They are
+        # already one-read values and remain derived from sticker URL bytes.
+        if not _PLAYBACK_KEY_RE.fullmatch(playback_key):
+            return
+        cache_key = _uid_cache_key(uid)
+        if self.entries.get(cache_key) == playback_key:
+            return
+        if cache_key not in self.entries and len(self.entries) >= _UID_CACHE_MAX_ENTRIES:
+            self.entries.pop(next(iter(self.entries)))
+        self.entries[cache_key] = playback_key
+        self._persist()
+
+    def forget_playback_key(self, playback_key: str) -> None:
+        filtered = {key: value for key, value in self.entries.items() if value != playback_key}
+        if len(filtered) == len(self.entries):
+            return
+        self.entries = filtered
+        self._persist()
+
+    def _load(self) -> None:
+        if self.path is None:
+            return
+        try:
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(document, dict):
+            return
+        mappings = document.get("mappings")
+        if document.get("version") != 1 or not isinstance(mappings, dict):
+            return
+        for key, value in list(mappings.items())[:_UID_CACHE_MAX_ENTRIES]:
+            if (
+                isinstance(key, str)
+                and isinstance(value, str)
+                and _UID_CACHE_KEY_RE.fullmatch(key)
+                and _PLAYBACK_KEY_RE.fullmatch(value)
+            ):
+                self.entries[key] = value
+
+    def _persist(self) -> None:
+        if self.path is None:
+            return
+        temporary_path: Path | None = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                dir=self.path.parent,
+                prefix=f".{self.path.name}.",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                os.chmod(temporary_path, 0o600)
+                json.dump({"version": 1, "mappings": self.entries}, handle, sort_keys=True)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, self.path)
+            temporary_path = None
+        except OSError:
+            LOGGER.warning("Could not persist the learned Story Sticker binding cache.")
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+
+def _uid_cache_key(uid: bytes | bytearray) -> str:
+    digest = hashlib.sha256(STORY_UID_CACHE_KEY_DOMAIN + bytes(uid)).hexdigest()
+    return f"sduid1_{digest}"
 
 
 def _story_v2_key_from_fast_window(window: bytes) -> str | None:

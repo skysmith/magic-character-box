@@ -1,5 +1,7 @@
 import math
+from pathlib import Path
 import sys
+import tempfile
 from types import ModuleType
 import unittest
 from unittest.mock import MagicMock, patch
@@ -10,6 +12,7 @@ from magic_box.nfc import (
     PN532NDEFReader,
     PN532SPIReader,
     _configure_pn532_communication_retries,
+    _configure_pn532_type2_receiver_gain,
     create_reader,
     story_playback_key_from_token,
     story_playback_key_from_url,
@@ -45,13 +48,38 @@ class PN532NDEFReaderTests(unittest.TestCase):
         fake_hardware.SAM_configuration.assert_called_once_with()
         configure_retries.assert_not_called()
 
-    def test_ndef_reader_explicitly_enables_hosted_type2_retries(self) -> None:
+    def test_ndef_reader_explicitly_enables_hosted_type2_receiver_profile(self) -> None:
         fake = _FakePN532(uid=None, memory=b"")
 
         with patch("magic_box.nfc._open_pn532_spi", return_value=fake) as open_reader:
             PN532NDEFReader()
 
-        open_reader.assert_called_once_with(type2_retries=True)
+        open_reader.assert_called_once_with(type2_receiver=True)
+
+    def test_type2_receiver_profile_matches_deployed_gain_and_field_cycle(self) -> None:
+        fake = _FakeReceiverConfiguration(current=b"\x12")
+
+        with patch("magic_box.nfc.time.sleep") as sleep:
+            _configure_pn532_type2_receiver_gain(fake)
+
+        self.assertEqual(
+            fake.calls,
+            [
+                (0x06, [0x63, 0x16], 1),
+                (0x32, [0x01, 0x00], None),
+                (0x08, [0x63, 0x16, 0x72], None),
+                (0x32, [0x01, 0x01], None),
+            ],
+        )
+        sleep.assert_called_once_with(0.10)
+
+    def test_receiver_profile_reenables_field_when_gain_write_fails(self) -> None:
+        fake = _FakeReceiverConfiguration(current=b"\x00", fail_write=True)
+
+        with self.assertRaisesRegex(NFCError, "receiver gain"):
+            _configure_pn532_type2_receiver_gain(fake)
+
+        self.assertEqual(fake.calls[-1], (0x32, [0x01, 0x01], None))
 
     def test_valid_multi_page_ndef_url_returns_domain_separated_opaque_key(self) -> None:
         token = "alpha_token-123"
@@ -154,6 +182,68 @@ class PN532NDEFReaderTests(unittest.TestCase):
 
         self.assertEqual(_ndef_reader(fake).read_uid(), story_playback_key_from_token(token))
         self.assertEqual(fake.read_pages[:3], [11, 4, 3])
+
+    def test_legacy_uid_cache_is_learned_only_after_exact_url_verification(self) -> None:
+        token = "legacy-cache-token"
+        uid = b"\x04\xA1\x22\x9B"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "ndef-uid-cache.json"
+            first_fake = _FakePN532(
+                uid=uid,
+                memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            )
+            expected_key = _ndef_reader(first_fake, uid_cache_path=cache_path).read_uid()
+
+            self.assertTrue(cache_path.exists())
+            cache_text = cache_path.read_text(encoding="utf-8")
+            self.assertNotIn(token, cache_text)
+            self.assertNotIn("04-A1-22-9B", cache_text)
+            self.assertGreater(len(first_fake.read_pages), 1)
+
+            cached_fake = _FakePN532(uid=uid, memory=b"")
+            cached_key = _ndef_reader(cached_fake, uid_cache_path=cache_path).read_uid()
+
+            self.assertEqual(cached_key, expected_key)
+            self.assertEqual(cached_fake.read_pages, [])
+
+    def test_v2_shortcut_never_enters_uid_cache(self) -> None:
+        private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "ndef-uid-cache.json"
+            fake = _FakePN532(
+                uid=b"\x04\xA1\x22\x9B",
+                memory=_type2_memory(
+                    _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
+                ),
+            )
+
+            key = _ndef_reader(fake, uid_cache_path=cache_path).read_uid()
+
+            self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
+            self.assertEqual(fake.read_pages, [11])
+            self.assertFalse(cache_path.exists())
+
+    def test_invalidating_learned_key_forces_next_legacy_url_read(self) -> None:
+        token = "legacy-invalidated-token"
+        uid = b"\x04\xA1\x22\x9B"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_path = Path(temp_dir) / "ndef-uid-cache.json"
+            first_fake = _FakePN532(
+                uid=uid,
+                memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            )
+            reader = _ndef_reader(first_fake, uid_cache_path=cache_path)
+            playback_key = reader.read_uid()
+            reader.invalidate_cached_identity(playback_key or "")
+
+            second_fake = _FakePN532(
+                uid=uid,
+                memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            )
+            second_key = _ndef_reader(second_fake, uid_cache_path=cache_path).read_uid()
+
+            self.assertEqual(second_key, playback_key)
+            self.assertGreater(len(second_fake.read_pages), 1)
 
     def test_no_tag_returns_none_without_reading_memory(self) -> None:
         fake = _FakePN532(uid=None, memory=b"")
@@ -440,6 +530,27 @@ class _FakeRFConfiguration:
         return self.response
 
 
+class _FakeReceiverConfiguration:
+    def __init__(self, *, current: bytes, fail_write: bool = False) -> None:
+        self.current = current
+        self.fail_write = fail_write
+        self.calls: list[tuple[int, list[int], int | None]] = []
+
+    def call_function(
+        self,
+        command: int,
+        *,
+        params: list[int],
+        response_length: int | None = None,
+    ) -> bytes | None:
+        self.calls.append((command, params, response_length))
+        if command == 0x06:
+            return self.current
+        if command == 0x08 and self.fail_write:
+            return None
+        return b""
+
+
 def _fake_pn532_modules(fake_hardware: MagicMock) -> dict[str, ModuleType]:
     board = ModuleType("board")
     board.SCK = object()  # type: ignore[attr-defined]
@@ -465,9 +576,13 @@ def _fake_pn532_modules(fake_hardware: MagicMock) -> dict[str, ModuleType]:
     }
 
 
-def _ndef_reader(fake: _FakePN532) -> PN532NDEFReader:
+def _ndef_reader(
+    fake: _FakePN532,
+    *,
+    uid_cache_path: Path | None = None,
+) -> PN532NDEFReader:
     with patch("magic_box.nfc._open_pn532_spi", return_value=fake):
-        return PN532NDEFReader()
+        return PN532NDEFReader(uid_cache_path=uid_cache_path)
 
 
 def _uri_record(url: str, *, header: int = 0xD1, prefix_code: int = 0x04) -> bytes:
