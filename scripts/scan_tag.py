@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print one NFC tag UID."""
+"""Print one NFC tag config lookup key."""
 
 from __future__ import annotations
 
@@ -17,8 +17,12 @@ from magic_box.nfc import NFCError, StopRequested, create_reader  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Scan one NFC tag and print its UID")
-    parser.add_argument("--nfc", default="pn532", help="Reader backend: pn532 or mock")
+    parser = argparse.ArgumentParser(description="Scan one NFC tag and print its config lookup key")
+    parser.add_argument(
+        "--nfc",
+        default="pn532",
+        help="Reader backend: pn532, pn532-ndef, or mock",
+    )
     parser.add_argument("--poll-interval", type=float, default=0.2)
     args = parser.parse_args()
 

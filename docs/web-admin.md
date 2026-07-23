@@ -331,10 +331,12 @@ The admin page includes a deliberately secondary Bluetooth panel with:
 The panel shells out to `bluetoothctl` for Bluetooth actions. `Use for audio` also tries to make the matching `bluez_output` Pulse/PipeWire sink the default output using `pactl`. The Pi services default to the wired MAX98357A speaker:
 
 ```text
-MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16
+MAGIC_BOX_AUDIO_BACKEND=continuous-pcm
+MAGIC_BOX_AUDIO_CMD=mpg123 -q -s --rate 48000 --stereo -e s16
+MAGIC_BOX_AUDIO_SINK_CMD=aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000
 ```
 
-That means Bluetooth speaker output is not part of the default finished-box path. If you want character audio to follow the Pi's default Pulse/PipeWire sink for a prototype, override the service audio command to `mpg123 -q -o pulse` and restart the services after selecting the Bluetooth sink.
+That means Bluetooth speaker output is not part of the default finished-box path. If you want character audio to follow the Pi's default Pulse/PipeWire sink for a prototype, explicitly switch the player backend to `subprocess`, set its audio command to `mpg123 -q -o pulse`, and restart the services after selecting the Bluetooth sink. Do not point the `continuous-pcm` sink at PipeWire; that backend intentionally requires one direct fixed-format ALSA owner.
 
 Install support tools on the Pi if they are missing:
 
@@ -368,20 +370,20 @@ For hardware boot/start pops, wire the MAX98357A `SD` shutdown pin to `GPIO16 / 
 If clip starts still pop, verify the founder audio path before changing hardware:
 
 ```bash
-MAGIC_BOX_AUDIO_BACKEND=mpg123-remote \
+MAGIC_BOX_AUDIO_BACKEND=continuous-pcm \
 MAGIC_BOX_MAX_OUTPUT_VOLUME=75 \
 MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0 \
-MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" \
-MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3 \
+MAGIC_BOX_AUDIO_CMD="mpg123 -q -s --rate 48000 --stereo -e s16" \
+MAGIC_BOX_AUDIO_SINK_CMD="aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000" \
 python -m magic_box.app --nfc pn532
 ```
 
-The main playback systemd files included in this repo use that backend, keep
-the amp enabled between clips, and do not start
-`magic-character-box-audio-keeper.service`. The admin systemd files stay on
-one-shot playback so the dashboard does not hold a second keep-open ALSA client.
-The older persistent `dmix`/keeper setup is kept only as historical context and
-should not be enabled on founder cards.
+The main playback service uses one long-lived direct ALSA sink and continuously
+feeds it silence or decoded clip PCM. It primes that stream before enabling the
+amp and keeps the amp enabled between clips. It does not start
+`magic-character-box-audio-keeper.service`; the older PipeWire/`dmix` keeper
+setup is historical and should not be enabled. Install `alsa-utils` so `aplay`
+is available.
 
 ## Voice Recording
 

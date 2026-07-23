@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 pi = [
   "adafruit-blinka",
-  "adafruit-circuitpython-pn532",
+  "adafruit-circuitpython-pn532==2.4.9",
   "gpiozero",
 ]
 

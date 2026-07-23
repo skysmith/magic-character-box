@@ -65,11 +65,16 @@ customer/product strategy.
 ## Current Behavior
 
 - Reads NFC UIDs from either a mock keyboard reader or a PN532 over SPI.
+- Offers an explicit `pn532-ndef` hosted mode that identifies a Story Sticker
+  from either a verified legacy `https://tap.getstorydock.com/s/<token>` URL or
+  a versioned `https://tap.getstorydock.com/s/<T32>/SD03-0001` URL. The suffix
+  path resolves its public alias through authenticated hosted config to the
+  same opaque `sdpk1_...` identity. UID is only a learned local acceleration.
 - Normalizes UIDs such as `04:a1:22:9b` to `04-A1-22-9B`.
 - Looks up characters in `config/characters.json`.
 - Stops current playback when a different known character is scanned.
 - Plays the first, shuffled, or next sequenced `.mp3` file in the mapped folder.
-- Ignores repeat scans of the same UID for a cooldown window.
+- Ignores repeat scans of the same tag identity for a cooldown window.
 - Continues playing when a tag is removed. In the MVP, only a new known tag changes playback.
 - Plays a startup chime when the service starts.
 - Plays a friendly discovery cue for unknown/unregistered tags.
@@ -148,8 +153,27 @@ python -m magic_box.app --nfc pn532
 You can also use environment variables:
 
 ```bash
-MAGIC_BOX_NFC=pn532 MAGIC_BOX_AUDIO_CMD="mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16" python -m magic_box.app
+MAGIC_BOX_NFC=pn532 \
+MAGIC_BOX_AUDIO_BACKEND=continuous-pcm \
+MAGIC_BOX_AUDIO_CMD="mpg123 -q -s --rate 48000 --stereo -e s16" \
+MAGIC_BOX_AUDIO_SINK_CMD="aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000" \
+python -m magic_box.app
 ```
+
+Ordinary `pn532` mode keeps the public maker workflow and uses the physical tag
+UID. A hosted deployment can opt in to URL identity instead:
+
+```bash
+python -m magic_box.app --nfc pn532-ndef
+```
+
+In `pn532-ndef` mode, the tag must contain exactly one canonical Story Dock
+NDEF HTTPS URI record. Legacy URLs are parsed completely. New suffix URLs put
+the public `SDxx-xxxx` alias in a fixed page-19 read window; the player accepts
+that alias only when the active hosted config maps it to a canonical
+token-derived `sdpk1_...` key. A hashed local UID binding can accelerate later
+taps but is never returned or configured as identity. URLs, tokens, and raw
+UIDs are not written to logs or hosted config.
 
 ## Scan A Tag
 

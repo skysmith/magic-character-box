@@ -27,6 +27,25 @@ sudo raspi-config
 
 Choose `Interface Options` -> `SPI` -> enable, then reboot.
 
+## Boot-Time Hardware Readiness
+
+The player services run as `pi` with the `audio`, `gpio`, and `spi` groups.
+Before Python initializes the PN532 or amp GPIO, an `ExecStartPre` check waits
+up to 60 seconds for `/dev/gpiomem` and `/dev/spidev0.0` to become readable and
+writable by that unprivileged process. This covers slow udev permission setup
+without running the player as root. A timeout fails the start cleanly, and the
+existing systemd restart policy remains the fallback.
+
+After copying a player service, verify the same access contract manually with:
+
+```bash
+sudo -u pi /home/pi/magic-character-box/.venv/bin/python \
+  -m magic_box.hardware_ready --timeout 0
+```
+
+If it fails, confirm `id -nG pi` includes `audio`, `gpio`, and `spi`, then use
+[troubleshooting.md](troubleshooting.md#box-does-not-start-after-reboot).
+
 ## Audio Notes
 
 For the MAX98357A I2S amp, configure Raspberry Pi OS to route audio to the I2S device. A typical `/boot/firmware/config.txt` setup is:
@@ -47,14 +66,14 @@ That keeps the amp muted early in boot. See [wiring.md](wiring.md) for the full 
 The included service files default to the built-in MAX98357A ALSA output through the direct `plughw` path that has been the cleanest on the founder docks:
 
 ```text
-MAGIC_BOX_AUDIO_BACKEND=mpg123-remote
+MAGIC_BOX_AUDIO_BACKEND=continuous-pcm
 MAGIC_BOX_DEFAULT_VOLUME=50
 MAGIC_BOX_MAX_OUTPUT_VOLUME=75
-MAGIC_BOX_AUDIO_CMD=mpg123 -q -o alsa -a plughw:CARD=MAX98357A,DEV=0 --rate 48000 --stereo -e s16
-MAGIC_BOX_AUDIO_WARMUP_FILE=/home/pi/magic-character-box/audio/system/silence.mp3
+MAGIC_BOX_AUDIO_CMD=mpg123 -q -s --rate 48000 --stereo -e s16
+MAGIC_BOX_AUDIO_SINK_CMD=aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000
 ```
 
-Main playback keeps a persistent `mpg123` remote process open on this direct ALSA path and loads the silent warmup file at startup so the amp/I2S path stays awake between taps. Volume buttons in the admin UI use app-level `mpg123` volume on this ALSA path, with `MAGIC_BOX_MAX_OUTPUT_VOLUME` acting as a small-speaker output ceiling. The old `dmix`/keeper-stream path is retired for founder images because it can add distortion or silence on the same hardware. If you intentionally override playback to Pulse/PipeWire for a Bluetooth experiment, the UI can use `wpctl` when available.
+Main playback keeps one direct `aplay` ALSA sink open and continuously feeds it fixed-format PCM. Idle time is zero PCM, while `mpg123 -s` decodes an active clip into that same stream. The sink receives 200 ms of silence before the amp is enabled, and idle silence is not reported as audible playback. Story paths are passed to the decoder through inherited file descriptors rather than exposed in its command line. On service stop, systemd signals the Python process first so it can cancel playback, mute the amp, terminate and reap the sink, and then release the GPIO. Volume buttons use the decoder's software volume, with `MAGIC_BOX_MAX_OUTPUT_VOLUME` acting as a small-speaker output ceiling. Install `alsa-utils` as well as `mpg123`; `aplay` is a required runtime dependency. The old PipeWire/`dmix` keeper path remains retired because it adds a second client and previously caused distortion or silence.
 
 Bluetooth speaker support is an experimental socket, not part of the recommended deployment path. The panel uses `bluetoothctl` for pairing and `pactl` to select a matching `bluez_output` sink when possible, but the default service files stay on the wired MAX98357A speaker. Install the optional tools only if you are intentionally experimenting:
 
