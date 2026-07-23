@@ -14,7 +14,7 @@ import time
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
-from .config import normalize_uid, story_locator_lookup_key
+from .config import normalize_uid
 
 
 LOGGER = logging.getLogger(__name__)
@@ -38,17 +38,21 @@ _TYPE2_LOCK_CONTROL_TLV = 0x01
 _TYPE2_MEMORY_CONTROL_TLV = 0x02
 _NDEF_TNF_WELL_KNOWN = 0x01
 _NDEF_URI_TYPE = b"U"
+_STORY_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{4,256}\Z")
+_STORY_SUFFIX_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{32}\Z")
+_STORY_PLAYBACK_ALIAS_RE = re.compile(r"[A-Z0-9]{4}-(?!0000\Z)[0-9]{4}\Z")
 _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
-_STORY_V2_PATH_RE = re.compile(
-    r"/s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{32})\Z"
+_STORY_SUFFIX_PATH_RE = re.compile(
+    r"/s/([A-Za-z0-9_-]{32})/([A-Z0-9]{4}-(?!0000\Z)[0-9]{4})\Z"
 )
-_STORY_V2_FAST_PATH_PAGE = 11
-_STORY_V2_FAST_WINDOW_RE = re.compile(
-    rb"s/([A-Z0-9]{4}-(?!0000/)[0-9]{4})/([A-Za-z0-9_-]{4})\Z"
+_STORY_SUFFIX_FAST_PATH_PAGE = 19
+_STORY_SUFFIX_FAST_WINDOW_RE = re.compile(
+    rb"[A-Za-z0-9_-]{2}/([A-Z0-9]{4}-(?!0000)[0-9]{4})\xFE\x00\x00\x00\Z"
 )
 _PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
 _UID_CACHE_KEY_RE = re.compile(r"sduid1_[0-9a-f]{64}\Z")
 _UID_CACHE_MAX_ENTRIES = 10_000
+_ALIAS_CONFIG_MAX_BYTES = 2 * 1024 * 1024
 _NTAG_PAGE_READ_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
@@ -245,11 +249,11 @@ class PN532SPIReader:
 class PN532NDEFReader:
     """Hosted reader whose playback key originates in Story Sticker URL data.
 
-    Shortcut tags expose their locator and first four token characters in one
-    fixed Type 2 READ window. A readable non-V2 window falls back to strict
-    full-NDEF V1 parsing. Only after an exact legacy URL has been verified may
-    a hashed local UID binding accelerate later taps. The physical UID is never
-    returned as playback identity, and V2 shortcut tags never enter that cache.
+    Luis-suffix tags expose only their public playback alias in one fixed Type
+    2 READ window. The alias must resolve through the authenticated local hosted
+    config to the canonical token-derived playback key. A readable non-suffix
+    window falls back to strict full-NDEF parsing for legacy stickers. Learned
+    UID fingerprints may accelerate later taps, but never become identity.
     """
 
     def __init__(
@@ -258,6 +262,7 @@ class PN532NDEFReader:
         *,
         expected_origin: str = STORY_STICKER_ORIGIN,
         uid_cache_path: Path | None = None,
+        config_path: Path | None = None,
     ) -> None:
         _require_https_origin(expected_origin)
         self.timeout = timeout
@@ -266,6 +271,10 @@ class PN532NDEFReader:
             configured_cache = os.getenv("MAGIC_BOX_NDEF_UID_CACHE", "").strip()
             uid_cache_path = Path(configured_cache).expanduser() if configured_cache else None
         self._uid_cache = _NDEFUIDCache(uid_cache_path)
+        if config_path is None:
+            configured_path = os.getenv("MAGIC_BOX_CONFIG", "config/characters.json").strip()
+            config_path = Path(configured_path).expanduser()
+        self._alias_resolver = _PlaybackAliasResolver(config_path)
         self._pn532 = _open_pn532_spi(type2_receiver=True)
 
     def read_uid(self) -> str | None:
@@ -283,16 +292,19 @@ class PN532NDEFReader:
 
         try:
             try:
-                fast_window = _read_ntag_window(self._pn532, _STORY_V2_FAST_PATH_PAGE)
+                fast_window = _read_ntag_window(self._pn532, _STORY_SUFFIX_FAST_PATH_PAGE)
             except ValueError:
-                # The shortcut is an optimization, not a new authority model.
-                # A transient failure at page 11 must still allow the exact
-                # complete NDEF URL to prove either a legacy or V2 identity.
+                # A transient shortcut-window failure may still be recovered
+                # by verifying the complete exact URL.
                 fast_window = None
             if fast_window is not None:
-                fast_key = _story_v2_key_from_fast_window(fast_window)
-                if fast_key is not None:
-                    return fast_key
+                playback_alias = _story_suffix_alias_from_fast_window(fast_window)
+                if playback_alias is not None:
+                    playback_key = self._alias_resolver.resolve(playback_alias)
+                    if playback_key is None:
+                        raise ValueError("Story Sticker playback alias was not active")
+                    self._uid_cache.remember(tag_present, playback_key)
+                    return playback_key
 
             # A window that was readable but does not exactly match the
             # shortcut contract may be a legacy V1 sticker. An unreadable fast
@@ -305,6 +317,14 @@ class PN532NDEFReader:
                 story_url,
                 expected_origin=self.expected_origin,
             )
+            playback_alias = story_playback_alias_from_url(
+                story_url,
+                expected_origin=self.expected_origin,
+            )
+            if playback_alias is not None:
+                resolved_key = self._alias_resolver.resolve(playback_alias)
+                if resolved_key != playback_key:
+                    raise ValueError("Story Sticker playback alias was not active")
             self._uid_cache.remember(tag_present, playback_key)
             return playback_key
         except Exception as exc:
@@ -318,13 +338,13 @@ class PN532NDEFReader:
             ) from None
 
     def invalidate_cached_identity(self, playback_key: str) -> None:
-        """Forget learned legacy bindings that no longer exist in the manifest."""
+        """Forget learned bindings that no longer exist in the active manifest."""
 
         self._uid_cache.forget_playback_key(playback_key)
 
 
 class _NDEFUIDCache:
-    """Bounded UID fingerprints learned only after an exact legacy URL read."""
+    """Bounded UID fingerprints learned after URL or active-alias verification."""
 
     def __init__(self, path: Path | None) -> None:
         self.path = path.expanduser().resolve() if path is not None else None
@@ -335,8 +355,6 @@ class _NDEFUIDCache:
         return self.entries.get(_uid_cache_key(uid))
 
     def remember(self, uid: bytes | bytearray, playback_key: str) -> None:
-        # V2 shortcut keys deliberately do not enter the UID cache. They are
-        # already one-read values and remain derived from sticker URL bytes.
         if not _PLAYBACK_KEY_RE.fullmatch(playback_key):
             return
         cache_key = _uid_cache_key(uid)
@@ -408,23 +426,80 @@ def _uid_cache_key(uid: bytes | bytearray) -> str:
     return f"sduid1_{digest}"
 
 
-def _story_v2_key_from_fast_window(window: bytes) -> str | None:
-    """Return a shortcut key only for the exact canonical 16-byte window."""
+class _PlaybackAliasResolver:
+    """Resolve public suffix aliases only through authenticated hosted config."""
 
-    match = _STORY_V2_FAST_WINDOW_RE.fullmatch(window)
+    def __init__(self, path: Path) -> None:
+        self.path = path.expanduser().resolve()
+        self._fingerprint: tuple[int, int, int] | None = None
+        self._aliases: dict[str, str] = {}
+
+    def resolve(self, playback_alias: str) -> str | None:
+        if _STORY_PLAYBACK_ALIAS_RE.fullmatch(playback_alias) is None:
+            return None
+        self._reload_if_changed()
+        return self._aliases.get(playback_alias)
+
+    def _reload_if_changed(self) -> None:
+        try:
+            stat = self.path.stat()
+            fingerprint = (stat.st_ino, stat.st_mtime_ns, stat.st_size)
+            if fingerprint == self._fingerprint:
+                return
+            if stat.st_size > _ALIAS_CONFIG_MAX_BYTES:
+                raise ValueError("hosted config was too large")
+            document = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(document, dict):
+                raise ValueError("hosted config was not an object")
+        except (OSError, TypeError, ValueError):
+            self._fingerprint = None
+            self._aliases = {}
+            return
+
+        aliases: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for raw_key, raw_entry in document.items():
+            if (
+                not isinstance(raw_key, str)
+                or _PLAYBACK_KEY_RE.fullmatch(raw_key) is None
+                or not isinstance(raw_entry, dict)
+                or raw_entry.get("source") != "hosted"
+                or raw_entry.get("hosted_playback_key") != raw_key
+            ):
+                continue
+            alias = raw_entry.get("hosted_playback_alias")
+            audio_alias = raw_entry.get("hosted_audio_alias")
+            if (
+                not isinstance(alias, str)
+                or _STORY_PLAYBACK_ALIAS_RE.fullmatch(alias) is None
+                or audio_alias != f"{alias}.mp3"
+            ):
+                continue
+            if alias in aliases and aliases[alias] != raw_key:
+                ambiguous.add(alias)
+            else:
+                aliases[alias] = raw_key
+        for alias in ambiguous:
+            aliases.pop(alias, None)
+        self._fingerprint = fingerprint
+        self._aliases = aliases
+
+
+def _story_suffix_alias_from_fast_window(window: bytes) -> str | None:
+    """Return the public alias only for the exact canonical page-19 window."""
+
+    match = _STORY_SUFFIX_FAST_WINDOW_RE.fullmatch(window)
     if match is None:
         return None
     try:
-        locator = match.group(1).decode("ascii", errors="strict")
-        token_prefix = match.group(2).decode("ascii", errors="strict")
+        return match.group(1).decode("ascii", errors="strict")
     except UnicodeDecodeError:
         return None
-    return story_locator_lookup_key(locator, token_prefix)
 
 
 def story_playback_key_from_token(token: str) -> str:
     """Derive the account-neutral config key for one opaque Story Sticker token."""
-    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{4,256}", token):
+    if not isinstance(token, str) or _STORY_TOKEN_RE.fullmatch(token) is None:
         raise ValueError("Story Sticker token was invalid")
     digest = hashlib.sha256(STORY_PLAYBACK_KEY_DOMAIN + token.encode("ascii")).hexdigest()
     return f"sdpk1_{digest}"
@@ -455,14 +530,27 @@ def story_playback_key_from_url(
     if parsed.query or parsed.fragment:
         raise ValueError("Story Sticker URL was invalid")
 
-    v2_match = _STORY_V2_PATH_RE.fullmatch(parsed.path)
-    if v2_match is not None:
-        return story_locator_lookup_key(v2_match.group(1), v2_match.group(2)[:4])
+    suffix_match = _STORY_SUFFIX_PATH_RE.fullmatch(parsed.path)
+    if suffix_match is not None:
+        return story_playback_key_from_token(suffix_match.group(1))
 
     v1_match = _STORY_PATH_RE.fullmatch(parsed.path)
     if v1_match is not None:
         return story_playback_key_from_token(v1_match.group(1))
     raise ValueError("Story Sticker URL was invalid")
+
+
+def story_playback_alias_from_url(
+    story_url: str,
+    *,
+    expected_origin: str = STORY_STICKER_ORIGIN,
+) -> str | None:
+    """Return the public suffix alias after the canonical URL validates."""
+
+    story_playback_key_from_url(story_url, expected_origin=expected_origin)
+    parsed = urlsplit(story_url)
+    suffix_match = _STORY_SUFFIX_PATH_RE.fullmatch(parsed.path)
+    return suffix_match.group(2) if suffix_match is not None else None
 
 
 def _require_https_origin(origin: str) -> None:
@@ -512,6 +600,7 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
         "NDEF URI was not HTTPS": "uri-scheme",
         "NDEF URI was invalid": "uri-encoding",
         "Story Sticker URL was invalid": "story-url",
+        "Story Sticker playback alias was not active": "playback-alias",
     }.get(str(exc), "unclassified")
 
 
@@ -699,7 +788,12 @@ def _single_uri_record(message: bytes) -> str:
     return prefix + suffix
 
 
-def create_reader(kind: str, prompt: str | None = None) -> NFCReader:
+def create_reader(
+    kind: str,
+    prompt: str | None = None,
+    *,
+    config_path: Path | None = None,
+) -> NFCReader:
     normalized = kind.strip().lower()
     if normalized in {"mock", "keyboard", "dev"}:
         return KeyboardNFCReader(prompt=prompt or KeyboardNFCReader.prompt)
@@ -709,7 +803,7 @@ def create_reader(kind: str, prompt: str | None = None) -> NFCReader:
     if normalized in {"pn532", "pn532-spi", "spi"}:
         return PN532SPIReader()
     if normalized == "pn532-ndef":
-        return PN532NDEFReader()
+        return PN532NDEFReader(config_path=config_path)
     raise NFCError(f"Unknown NFC reader {kind!r}; use mock, file, pn532, or pn532-ndef")
 
 

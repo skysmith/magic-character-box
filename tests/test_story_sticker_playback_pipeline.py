@@ -7,29 +7,26 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from magic_box.app import _handle_service_stop, main
-from magic_box.config import story_locator_lookup_key
-from magic_box.nfc import PN532NDEFReader
+from magic_box.nfc import PN532NDEFReader, story_playback_key_from_token
 
 
 ORIGIN = "https://tap.getstorydock.com"
 
 
 class StoryStickerPlaybackPipelineTests(unittest.TestCase):
-    def test_v2_locator_window_selects_manifest_audio_after_transient_read_failures(self) -> None:
-        """Exercise V2 one-window identity, Manifest lookup, and playback selection."""
-        playback_key = story_locator_lookup_key("SD03-0001", "ABCD")
+    def test_suffix_window_selects_manifest_audio_after_transient_read_failures(self) -> None:
+        """Exercise suffix-window resolution, manifest lookup, and playback selection."""
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(token)
         fake_pn532 = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
                 _uri_record(
-                    f"{ORIGIN}/s/SD03-0001/"
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+                    f"{ORIGIN}/s/{token}/SD03-0001"
                 )
             ),
-            transient_page_failures={11: 2},
+            transient_page_failures={19: 2},
         )
-        with patch("magic_box.nfc._open_pn532_spi", return_value=fake_pn532):
-            ndef_reader = PN532NDEFReader()
 
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -37,7 +34,7 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             legacy_uid_folder = root / "audio" / "wrong-uid-fallback"
             expected_folder.mkdir(parents=True)
             legacy_uid_folder.mkdir(parents=True)
-            (expected_folder / "memory.mp3").write_bytes(b"synthetic audio fixture")
+            (expected_folder / "SD03-0001.mp3").write_bytes(b"synthetic audio fixture")
             (legacy_uid_folder / "wrong.mp3").write_bytes(b"must not be selected")
 
             config_path = root / "config" / "characters.json"
@@ -49,6 +46,10 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
                             "name": "URL-selected memory",
                             "folder": "audio/url-selected",
                             "mode": "first",
+                            "source": "hosted",
+                            "hosted_playback_key": playback_key,
+                            "hosted_playback_alias": "SD03-0001",
+                            "hosted_audio_alias": "SD03-0001.mp3",
                         },
                         # A conflicting legacy UID entry makes UID fallback observable.
                         "04-A1-22-9B": {
@@ -60,6 +61,8 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            with patch("magic_box.nfc._open_pn532_spi", return_value=fake_pn532):
+                ndef_reader = PN532NDEFReader(config_path=config_path)
 
             player = MagicMock()
             player.play_folder.return_value = True
@@ -98,7 +101,7 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             character_name="URL-selected memory",
             source="playback",
         )
-        self.assertEqual(fake_pn532.page_read_attempts, {11: 3})
+        self.assertEqual(fake_pn532.page_read_attempts, {19: 3})
         self.assertEqual(fake_pn532.selection_attempts, 3)
 
 

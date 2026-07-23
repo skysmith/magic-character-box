@@ -7,7 +7,6 @@ from magic_box.config import (
     ConfigError,
     normalize_uid,
     slugify_name,
-    story_locator_lookup_key,
     unique_character_folder,
 )
 
@@ -36,29 +35,9 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 normalize_uid(key)
 
-    def test_constructs_and_preserves_canonical_story_locator_key(self) -> None:
-        key = story_locator_lookup_key("SD03-0001", "ABCD")
-
-        self.assertEqual(key, "sdlk2_SD03-0001_ABCD")
-        self.assertEqual(normalize_uid(key), key)
-
-    def test_locator_key_constructor_rejects_noncanonical_components(self) -> None:
-        invalid = (
-            ("SD3-0001", "ABCD"),
-            ("SD03-001", "ABCD"),
-            ("SD03-0000", "ABCD"),
-            ("sd03-0001", "ABCD"),
-            ("SD03-0001", "ABC!"),
-            ("SD03-0001", "ABC"),
-            ("SD03-0001", "ABCD "),
-        )
-
-        for locator, verifier in invalid:
-            with self.subTest(locator=locator, verifier=verifier), self.assertRaises(ValueError):
-                story_locator_lookup_key(locator, verifier)
-
-    def test_malformed_story_locator_key_is_rejected_not_normalized_as_uid(self) -> None:
+    def test_retired_story_locator_keys_are_rejected_not_normalized_as_uids(self) -> None:
         malformed = (
+            "sdlk2_SD03-0001_ABCD",
             "SDLK2_SD03-0001_ABCD",
             "sdlk2_SD03-0001_ABC!",
             "sdlk2_SD03-0000_ABCD",
@@ -70,6 +49,10 @@ class ConfigTests(unittest.TestCase):
         for key in malformed:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 normalize_uid(key)
+
+    def test_story_playback_alias_is_rejected_as_identity(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_uid("sdla1_SD03-0001")
 
     def test_slugify_name_removes_apostrophes(self) -> None:
         self.assertEqual(slugify_name("He's got the Whole World in his Hands"), "hes-got-the-whole-world-in-his-hands")
@@ -108,22 +91,19 @@ class ConfigTests(unittest.TestCase):
             assert character is not None
             self.assertEqual(character.uid, key)
 
-    def test_loads_and_looks_up_story_locator_key(self) -> None:
+    def test_load_rejects_retired_story_locator_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             (root / "config").mkdir()
             (root / "audio" / "memory").mkdir(parents=True)
-            key = story_locator_lookup_key("SD03-0001", "ABCD")
+            key = "sdlk2_SD03-0001_ABCD"
             (root / "config" / "characters.json").write_text(
                 '{"' + key + '": {"name": "Memory", "folder": "audio/memory", "mode": "first"}}',
                 encoding="utf-8",
             )
 
-            config = CharacterConfig.load(root / "config" / "characters.json")
-
-            character = config.lookup(key)
-            assert character is not None
-            self.assertEqual(character.uid, key)
+            with self.assertRaises(ConfigError):
+                CharacterConfig.load(root / "config" / "characters.json")
 
     def test_load_rejects_noncanonical_story_playback_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -83,7 +83,8 @@ Possible future reasons to write tags:
 - Cross-box portability.
 - Character metadata stored on the figure.
 - Pairing tags with a mobile app.
-- Story Dock phone-tap flow, where a commercial Story Sticker has a prewritten `/s/<token>` URL.
+- Story Dock phone-tap flow, where a commercial Story Sticker has a prewritten
+  versioned Story Dock URL.
 
 If that becomes necessary, add a separate `write_tag.py` tool with a dry-run mode and clear warnings. Keep UID-based registration as the default because it is simpler and harder to break.
 
@@ -93,8 +94,10 @@ For the commercial Story Dock direction, the sticker/card carries an NDEF URL
 that both the phone and a hosted-mode dock can use:
 
 - The phone opens the NDEF URL for recording.
-- A dock started with `--nfc pn532-ndef` reads that same URL and derives an
-  opaque `sdpk1_...` config lookup key for playback.
+- A dock started with `--nfc pn532-ndef` either verifies a complete legacy URL
+  or reads the public suffix of a Luis-suffix URL from absolute page 19. The
+  suffix must resolve through authenticated hosted config to an opaque
+  `sdpk1_...` playback key.
 
 The open-source dashboard's `Story stickers` tool remains a separate local
 maker flow. It creates a `/story/<token>` link and stores it in
@@ -104,20 +107,25 @@ the strict hosted reader.
 The open-source dashboard can also generate a QR SVG for that same `/story/<token>` URL. That is the free fallback path: print the QR on a backing card, photo sleeve, prompt card, or setup sheet while still using the PN532/NFC UID for dock playback when available. NFC remains the preferred magic interaction, but QR lets a phone open the same recording page without writing an NFC URL tag.
 
 Ordinary `--nfc pn532` maker mode is unchanged and still uses the physical UID.
-Hosted `pn532-ndef` mode only accepts a single
-`https://tap.getstorydock.com/s/<token>` NDEF URI record; it never falls back to
-the UID if URL reading or validation fails, and it never logs the URL or token.
+Hosted `pn532-ndef` mode only accepts a single canonical NDEF URI record:
+legacy `https://tap.getstorydock.com/s/<token>` or versioned
+`https://tap.getstorydock.com/s/<T32>/<SDxx-xxxx>`. It never treats UID, the
+suffix, four digits, or a filename as identity, and it never logs the URL,
+token, or raw UID. A learned hashed UID cache may skip later RF reads only
+after URL or active-alias verification and is invalidated when its playback key
+is no longer configured.
 
 For a factory-encoded tag batch, the supplier may still return a manufacturing
 manifest for QA and traceability:
 
 ```text
-printed support code -> NFC UID -> encoded URL token
+printed Sticker ID -> exact encoded URL -> optional NFC UID diagnostic
 ```
 
-The runtime playback identity itself comes from the prewritten URL, so the phone
-recording flow and dock playback flow meet without asking a normal user to
-write NFC tags or manually bind a UID at home.
+The runtime playback identity remains the token-derived hosted playback key;
+the suffix only lets the dock reach that key with one reliable short read. The
+phone recording flow and dock playback flow meet without asking a normal user
+to write NFC tags or manually bind a UID at home.
 
 ## Troubleshooting
 

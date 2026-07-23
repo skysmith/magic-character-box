@@ -245,7 +245,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
 
     try:
-        reader = create_reader(args.nfc)
+        reader = create_reader(args.nfc, config_path=config.path)
     except NFCError as exc:
         LOGGER.error("%s", exc)
         return 2
@@ -329,6 +329,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             character = config.lookup(uid)
             if character is None:
+                invalidate_cached_identity = getattr(reader, "invalidate_cached_identity", None)
+                if callable(invalidate_cached_identity):
+                    invalidate_cached_identity(uid)
                 LOGGER.warning("Unknown tag %s", uid)
                 _safe_record_tag(state_path, uid, known=False, source="playback")
                 if _play_system_sound(player, unknown_sound, "unknown tag"):

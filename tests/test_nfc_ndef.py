@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 import sys
@@ -6,7 +7,6 @@ from types import ModuleType
 import unittest
 from unittest.mock import MagicMock, patch
 
-from magic_box.config import story_locator_lookup_key
 from magic_box.nfc import (
     NFCError,
     PN532NDEFReader,
@@ -15,6 +15,7 @@ from magic_box.nfc import (
     _configure_pn532_type2_receiver_gain,
     create_reader,
     story_playback_key_from_token,
+    story_playback_alias_from_url,
     story_playback_key_from_url,
 )
 
@@ -92,59 +93,67 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key,
             "sdpk1_9a1a0b2715b28494d7c368b315a9aaf0d359124421d51a50cdd403f10d98d424",
         )
-        self.assertEqual(fake.read_pages[:3], [11, 4, 3])
+        self.assertEqual(fake.read_pages[:3], [19, 4, 3])
         self.assertLessEqual(len(fake.read_pages), 6)
         self.assertNotIn(token, key or "")
 
-    def test_v2_url_returns_locator_key_from_exactly_one_page_11_window(self) -> None:
+    def test_suffix_url_resolves_canonical_key_from_exactly_one_page_19_window(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
-        url = f"{ORIGIN}/s/SD03-0001/{private_token}"
+        playback_key = story_playback_key_from_token(private_token)
+        url = f"{ORIGIN}/s/{private_token}/SD03-0001"
         fake = _FakePN532(uid=b"\x04\xA1\x22\x9B", memory=_type2_memory(_uri_record(url)))
 
-        key = _ndef_reader(fake).read_uid()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = _write_hosted_config(Path(temp_dir), playback_key, "SD03-0001")
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
-        self.assertEqual(fake.read_pages, [11])
+        self.assertEqual(key, playback_key)
+        self.assertEqual(fake.read_pages, [19])
         self.assertEqual(fake.selection_attempts, 1)
         self.assertNotIn(private_token, key or "")
 
-    def test_v2_fast_window_uses_exact_case_sensitive_token_prefix(self) -> None:
-        for private_token in (
-            "WXYZ" + "x" * 28,
-            "a-_2" + "y" * 28,
-        ):
-            with self.subTest(prefix=private_token[:4]):
-                url = f"{ORIGIN}/s/SD03-0001/{private_token}"
-                fake = _FakePN532(uid=b"\x04\xA1", memory=_type2_memory(_uri_record(url)))
+    def test_suffix_fast_window_ignores_token_tail_as_identity(self) -> None:
+        aliases = (("SD03-0001", "WXYZ" + "x" * 28), ("SD03-0002", "a-_2" + "y" * 28))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for alias, private_token in aliases:
+                with self.subTest(alias=alias):
+                    playback_key = story_playback_key_from_token(private_token)
+                    config_path = _write_hosted_config(root, playback_key, alias)
+                    url = f"{ORIGIN}/s/{private_token}/{alias}"
+                    fake = _FakePN532(uid=b"\x04\xA1", memory=_type2_memory(_uri_record(url)))
+                    self.assertEqual(
+                        _ndef_reader(fake, config_path=config_path).read_uid(),
+                        playback_key,
+                    )
+                    self.assertEqual(fake.read_pages, [19])
 
-                self.assertEqual(
-                    _ndef_reader(fake).read_uid(),
-                    story_locator_lookup_key("SD03-0001", private_token[:4]),
-                )
-                self.assertEqual(fake.read_pages, [11])
-
-    def test_v2_fast_window_retries_are_bounded_and_never_use_uid(self) -> None:
-        url = f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+    def test_suffix_fast_window_retries_are_bounded_and_never_use_uid_as_identity(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        url = f"{ORIGIN}/s/{token}/SD03-0001"
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(_uri_record(url)),
-            transient_page_failures={11: 2},
+            transient_page_failures={19: 2},
         )
 
-        with patch("magic_box.nfc.time.sleep") as sleep:
-            key = _ndef_reader(fake).read_uid()
+        with tempfile.TemporaryDirectory() as temp_dir, patch("magic_box.nfc.time.sleep") as sleep:
+            config_path = _write_hosted_config(
+                Path(temp_dir), story_playback_key_from_token(token), "SD03-0001"
+            )
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
-        self.assertEqual(fake.read_pages, [11, 11, 11])
+        self.assertEqual(key, story_playback_key_from_token(token))
+        self.assertEqual(fake.read_pages, [19, 19, 19])
         self.assertEqual(fake.selection_attempts, 3)
         self.assertEqual(sleep.call_count, 2)
 
-    def test_v2_wrong_size_window_fails_closed_with_value_free_reason(self) -> None:
+    def test_suffix_wrong_size_window_fails_closed_with_value_free_reason(self) -> None:
         private_token = "mustneverappearxxxxxxxxxxxxxxxxx"
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
-                _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
+                _uri_record(f"{ORIGIN}/s/{private_token}/SD03-0001")
             ),
         )
         fake.mifare_classic_read_block = MagicMock(return_value=b"short")
@@ -164,32 +173,34 @@ class PN532NDEFReaderTests(unittest.TestCase):
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
-            transient_page_failures={11: 3},
+            transient_page_failures={19: 3},
         )
 
         with patch("magic_box.nfc.time.sleep"):
             key = _ndef_reader(fake).read_uid()
 
         self.assertEqual(key, story_playback_key_from_token(token))
-        self.assertEqual(fake.read_pages[:4], [11, 11, 11, 4])
+        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
 
-    def test_unreadable_fast_window_uses_strict_v2_full_ndef_fallback(self) -> None:
+    def test_unreadable_fast_window_uses_strict_suffix_full_ndef_fallback(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(private_token)
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
-                _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
+                _uri_record(f"{ORIGIN}/s/{private_token}/SD03-0001")
             ),
-            transient_page_failures={11: 3},
+            transient_page_failures={19: 3},
         )
 
-        with patch("magic_box.nfc.time.sleep"):
-            key = _ndef_reader(fake).read_uid()
+        with tempfile.TemporaryDirectory() as temp_dir, patch("magic_box.nfc.time.sleep"):
+            config_path = _write_hosted_config(Path(temp_dir), playback_key, "SD03-0001")
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
-        self.assertEqual(fake.read_pages[:4], [11, 11, 11, 4])
+        self.assertEqual(key, playback_key)
+        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
 
-    def test_readable_non_v2_window_uses_strict_v1_full_ndef_fallback(self) -> None:
+    def test_readable_non_suffix_window_uses_strict_legacy_full_ndef_fallback(self) -> None:
         token = "legacy-fallback-token"
         fake = _FakePN532(
             uid=b"\x04\xA1",
@@ -197,7 +208,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
         )
 
         self.assertEqual(_ndef_reader(fake).read_uid(), story_playback_key_from_token(token))
-        self.assertEqual(fake.read_pages[:3], [11, 4, 3])
+        self.assertEqual(fake.read_pages[:3], [19, 4, 3])
 
     def test_legacy_uid_cache_is_learned_only_after_exact_url_verification(self) -> None:
         token = "legacy-cache-token"
@@ -222,22 +233,80 @@ class PN532NDEFReaderTests(unittest.TestCase):
             self.assertEqual(cached_key, expected_key)
             self.assertEqual(cached_fake.read_pages, [])
 
-    def test_v2_shortcut_never_enters_uid_cache(self) -> None:
+    def test_suffix_shortcut_enters_uid_cache_only_after_active_alias_resolution(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_path = Path(temp_dir) / "ndef-uid-cache.json"
             fake = _FakePN532(
                 uid=b"\x04\xA1\x22\x9B",
                 memory=_type2_memory(
-                    _uri_record(f"{ORIGIN}/s/SD03-0001/{private_token}")
+                    _uri_record(f"{ORIGIN}/s/{private_token}/SD03-0001")
                 ),
             )
+            playback_key = story_playback_key_from_token(private_token)
+            config_path = _write_hosted_config(Path(temp_dir), playback_key, "SD03-0001")
 
-            key = _ndef_reader(fake, uid_cache_path=cache_path).read_uid()
+            key = _ndef_reader(
+                fake, uid_cache_path=cache_path, config_path=config_path
+            ).read_uid()
 
-            self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
-            self.assertEqual(fake.read_pages, [11])
-            self.assertFalse(cache_path.exists())
+            self.assertEqual(key, playback_key)
+            self.assertEqual(fake.read_pages, [19])
+            self.assertTrue(cache_path.exists())
+            self.assertNotIn("04-A1-22-9B", cache_path.read_text(encoding="utf-8"))
+
+    def test_suffix_alias_missing_from_active_config_fails_without_uid_or_url_fallback(self) -> None:
+        private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(
+                _uri_record(f"{ORIGIN}/s/{private_token}/SD03-0001")
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(NFCError, r"\(playback-alias\)") as raised:
+                _ndef_reader(fake, config_path=config_path).read_uid()
+
+        self.assertEqual(fake.read_pages, [19])
+        self.assertNotIn(private_token, str(raised.exception))
+        self.assertNotIn("04-A1", str(raised.exception))
+
+    def test_duplicate_suffix_aliases_in_config_fail_closed(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        other_token = "0123456789abcdefghijklmnopqrstuv"
+        first_key = story_playback_key_from_token(token)
+        second_key = story_playback_key_from_token(other_token)
+        fake = _FakePN532(
+            uid=b"\x04\xA1",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}/SD03-0001")),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir(parents=True)
+            entry = {
+                "source": "hosted",
+                "hosted_playback_alias": "SD03-0001",
+                "hosted_audio_alias": "SD03-0001.mp3",
+                "name": "Memory",
+                "folder": "audio/hosted/memory",
+                "mode": "first",
+            }
+            config_path.write_text(
+                json.dumps(
+                    {
+                        first_key: {**entry, "hosted_playback_key": first_key},
+                        second_key: {**entry, "hosted_playback_key": second_key},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(NFCError, r"\(playback-alias\)"):
+                _ndef_reader(fake, config_path=config_path).read_uid()
+
+        self.assertEqual(fake.read_pages, [19])
 
     def test_invalidating_learned_key_forces_next_legacy_url_read(self) -> None:
         token = "legacy-invalidated-token"
@@ -372,14 +441,15 @@ class PN532NDEFReaderTests(unittest.TestCase):
                     _ndef_reader(fake).read_uid()
                 self.assertNotIn(url, str(raised.exception))
 
-    def test_noncanonical_v2_locator_or_token_prefix_fails_closed(self) -> None:
+    def test_noncanonical_suffix_token_or_alias_fails_closed(self) -> None:
         invalid_urls = (
-            f"{ORIGIN}/s/SD3-0001/ABCD" + "x" * 28,
-            f"{ORIGIN}/s/SD03-001/ABCD" + "x" * 28,
-            f"{ORIGIN}/s/SD03-0000/ABCD" + "x" * 28,
-            f"{ORIGIN}/s/sd03-0001/ABCD" + "x" * 28,
-            f"{ORIGIN}/s/SD03-0001/ABC!" + "x" * 28,
-            f"{ORIGIN}/s/SD03-0001/ABC",
+            f"{ORIGIN}/s/{'A' * 32}/SD3-0001",
+            f"{ORIGIN}/s/{'A' * 32}/SD03-001",
+            f"{ORIGIN}/s/{'A' * 32}/SD03-0000",
+            f"{ORIGIN}/s/{'A' * 32}/sd03-0001",
+            f"{ORIGIN}/s/{'A' * 31}/SD03-0001",
+            f"{ORIGIN}/s/{'A' * 32}!/SD03-0001",
+            f"{ORIGIN}/s/SD03-0001/{'A' * 32}",
         )
 
         for url in invalid_urls:
@@ -390,41 +460,58 @@ class PN532NDEFReaderTests(unittest.TestCase):
                 self.assertNotIn(url, str(raised.exception))
                 self.assertNotIn("ABCD", str(raised.exception))
 
-    def test_shifted_v2_bytes_use_complete_url_fallback_not_substring_matching(self) -> None:
+    def test_shifted_suffix_bytes_use_complete_url_fallback_not_substring_matching(self) -> None:
         # The no-prefix URI encoding shifts the otherwise canonical text. It
         # must not be accepted through a substring search or variable scan,
         # but the exact complete NDEF URL remains an authoritative fallback.
-        url = f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(token)
+        url = f"{ORIGIN}/s/{token}/SD03-0001"
         fake = _FakePN532(
             uid=b"\x04\xA1",
             memory=_type2_memory(_uri_record(url, prefix_code=0x00)),
         )
 
-        key = _ndef_reader(fake).read_uid()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = _write_hosted_config(Path(temp_dir), playback_key, "SD03-0001")
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(key, story_locator_lookup_key("SD03-0001", "ABCD"))
+        self.assertEqual(key, playback_key)
         self.assertGreater(len(fake.read_pages), 1)
 
-    def test_v2_identity_uses_both_full_locator_and_token_prefix_not_uid(self) -> None:
+    def test_suffix_identity_is_manifest_key_not_alias_or_uid(self) -> None:
         uid = b"\x04\xA1\x22\x9B"
         identities = []
-        for locator, token_prefix in (
-            ("SD03-0001", "ABCD"),
-            ("SD03-0002", "ABCD"),
-            ("SD03-0001", "a-_2"),
+        for alias, token in (
+            ("SD03-0001", "A" * 32),
+            ("SD03-0002", "B" * 32),
+            ("SD03-0003", "a-_2" + "y" * 28),
         ):
-            url = f"{ORIGIN}/s/{locator}/{token_prefix}" + "x" * 28
-            identities.append(
-                _ndef_reader(_FakePN532(uid=uid, memory=_type2_memory(_uri_record(url)))).read_uid()
-            )
+            with tempfile.TemporaryDirectory() as temp_dir:
+                playback_key = story_playback_key_from_token(token)
+                config_path = _write_hosted_config(Path(temp_dir), playback_key, alias)
+                url = f"{ORIGIN}/s/{token}/{alias}"
+                identities.append(
+                    _ndef_reader(
+                        _FakePN532(uid=uid, memory=_type2_memory(_uri_record(url))),
+                        config_path=config_path,
+                    ).read_uid()
+                )
 
         self.assertEqual(len(set(identities)), 3)
 
-        shared = _type2_memory(
-            _uri_record(f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef")
-        )
-        first = _ndef_reader(_FakePN532(uid=b"\x04\xA1", memory=shared)).read_uid()
-        second = _ndef_reader(_FakePN532(uid=b"\x04\xB2", memory=shared)).read_uid()
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        shared = _type2_memory(_uri_record(f"{ORIGIN}/s/{token}/SD03-0001"))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = _write_hosted_config(
+                Path(temp_dir), story_playback_key_from_token(token), "SD03-0001"
+            )
+            first = _ndef_reader(
+                _FakePN532(uid=b"\x04\xA1", memory=shared), config_path=config_path
+            ).read_uid()
+            second = _ndef_reader(
+                _FakePN532(uid=b"\x04\xB2", memory=shared), config_path=config_path
+            ).read_uid()
         self.assertEqual(first, second)
 
     def test_same_uid_different_urls_have_different_identity(self) -> None:
@@ -491,12 +578,17 @@ class StoryPlaybackKeyTests(unittest.TestCase):
             story_playback_key_from_token("alpha_token-123"),
         )
 
-    def test_url_derivation_accepts_canonical_v2_path(self) -> None:
+    def test_url_derivation_accepts_canonical_suffix_path(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         self.assertEqual(
             story_playback_key_from_url(
-                f"{ORIGIN}/s/SD03-0001/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+                f"{ORIGIN}/s/{token}/SD03-0001"
             ),
-            story_locator_lookup_key("SD03-0001", "ABCD"),
+            story_playback_key_from_token(token),
+        )
+        self.assertEqual(
+            story_playback_alias_from_url(f"{ORIGIN}/s/{token}/SD03-0001"),
+            "SD03-0001",
         )
 
 
@@ -512,7 +604,7 @@ class _FakePN532:
         if add_terminator and (not memory or memory[-1] != 0xFE):
             memory += b"\xFE"
         # Real Story Stickers have at least the NTAG213 144-byte user area,
-        # so page 11 remains readable even for a short V1 message.
+        # so page 19 remains readable even for a short legacy message.
         data_units = max(18, math.ceil(len(memory) / 8))
         padded = memory.ljust(data_units * 8, b"\x00")
         self.uid = uid
@@ -605,9 +697,32 @@ def _ndef_reader(
     fake: _FakePN532,
     *,
     uid_cache_path: Path | None = None,
+    config_path: Path | None = None,
 ) -> PN532NDEFReader:
     with patch("magic_box.nfc._open_pn532_spi", return_value=fake):
-        return PN532NDEFReader(uid_cache_path=uid_cache_path)
+        return PN532NDEFReader(uid_cache_path=uid_cache_path, config_path=config_path)
+
+
+def _write_hosted_config(root: Path, playback_key: str, playback_alias: str) -> Path:
+    config_path = root / "config" / "characters.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(
+        json.dumps(
+            {
+                playback_key: {
+                    "source": "hosted",
+                    "hosted_playback_key": playback_key,
+                    "hosted_playback_alias": playback_alias,
+                    "hosted_audio_alias": f"{playback_alias}.mp3",
+                    "name": "Memory",
+                    "folder": "audio/hosted/memory",
+                    "mode": "first",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return config_path
 
 
 def _uri_record(url: str, *, header: int = 0xD1, prefix_code: int = 0x04) -> bytes:

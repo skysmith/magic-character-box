@@ -66,8 +66,10 @@ customer/product strategy.
 
 - Reads NFC UIDs from either a mock keyboard reader or a PN532 over SPI.
 - Offers an explicit `pn532-ndef` hosted mode that identifies a Story Sticker
-  from its verified `https://tap.getstorydock.com/s/<token>` NDEF URL. This mode
-  derives an opaque `sdpk1_...` config key and never falls back to the tag UID.
+  from either a verified legacy `https://tap.getstorydock.com/s/<token>` URL or
+  a versioned `https://tap.getstorydock.com/s/<T32>/SD03-0001` URL. The suffix
+  path resolves its public alias through authenticated hosted config to the
+  same opaque `sdpk1_...` identity. UID is only a learned local acceleration.
 - Normalizes UIDs such as `04:a1:22:9b` to `04-A1-22-9B`.
 - Looks up characters in `config/characters.json`.
 - Stops current playback when a different known character is scanned.
@@ -165,10 +167,13 @@ UID. A hosted deployment can opt in to URL identity instead:
 python -m magic_box.app --nfc pn532-ndef
 ```
 
-In `pn532-ndef` mode, the tag must contain exactly one well-formed NDEF HTTPS
-URI record at `https://tap.getstorydock.com/s/<token>`. The player reads that
-URL directly from the NTAG, derives a one-way `sdpk1_...` lookup key, and never
-uses the physical UID as a fallback. URLs and tokens are not written to logs.
+In `pn532-ndef` mode, the tag must contain exactly one canonical Story Dock
+NDEF HTTPS URI record. Legacy URLs are parsed completely. New suffix URLs put
+the public `SDxx-xxxx` alias in a fixed page-19 read window; the player accepts
+that alias only when the active hosted config maps it to a canonical
+token-derived `sdpk1_...` key. A hashed local UID binding can accelerate later
+taps but is never returned or configured as identity. URLs, tokens, and raw
+UIDs are not written to logs or hosted config.
 
 ## Scan A Tag
 

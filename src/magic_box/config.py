@@ -12,11 +12,6 @@ import unicodedata
 
 VALID_MODES = {"first", "shuffle", "sequence"}
 STORY_PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
-STORY_LOCATOR_RE = re.compile(r"[A-Z0-9]{4}-(?!0000\Z)[0-9]{4}\Z")
-STORY_LOCATOR_TOKEN_PREFIX_RE = re.compile(r"[A-Za-z0-9_-]{4}\Z")
-STORY_LOCATOR_KEY_RE = re.compile(
-    r"sdlk2_[A-Z0-9]{4}-(?!0000_)[0-9]{4}_[A-Za-z0-9_-]{4}\Z"
-)
 
 
 class ConfigError(Exception):
@@ -46,16 +41,14 @@ def normalize_uid(uid: str) -> str:
             raise ValueError("Playback key must use canonical sdpk1_<64 lowercase hex> form")
         return value
 
-    # Shortcut Story Stickers expose a short, non-authorizing locator plus the
-    # first four private-token characters in one fixed Type 2 read window. Keep their
-    # composite lookup keys in a reserved namespace and reject lookalikes
-    # rather than letting maker-mode UID normalization reinterpret them.
+    # The retired page-11 prototype used sdlk2 keys as playback identity. Keep
+    # that namespace reserved so an old or malformed prototype mapping cannot
+    # silently be reinterpreted as a maker-mode UID.
     if value.lower().startswith("sdlk2"):
-        if STORY_LOCATOR_KEY_RE.fullmatch(value) is None:
-            raise ValueError(
-                "Locator key must use canonical sdlk2_<batch>-<number>_<4 token chars> form"
-            )
-        return value
+        raise ValueError("Retired sdlk2 locator keys are not supported")
+
+    if value.lower().startswith("sdla1"):
+        raise ValueError("Playback aliases are metadata, not config identity keys")
 
     value = value.upper()
 
@@ -65,20 +58,6 @@ def normalize_uid(uid: str) -> str:
         return "-".join(compact[index : index + 2] for index in range(0, len(compact), 2))
 
     return re.sub(r"[-_\s:]+", "-", value).strip("-")
-
-
-def story_locator_lookup_key(locator: str, token_prefix: str) -> str:
-    """Construct the canonical config key for a shortcut Story Sticker."""
-
-    if not isinstance(locator, str) or STORY_LOCATOR_RE.fullmatch(locator) is None:
-        raise ValueError("Story Sticker locator was invalid")
-    if (
-        not isinstance(token_prefix, str)
-        or STORY_LOCATOR_TOKEN_PREFIX_RE.fullmatch(token_prefix) is None
-    ):
-        raise ValueError("Story Sticker token prefix was invalid")
-    return f"sdlk2_{locator}_{token_prefix}"
-
 
 class CharacterConfig:
     """Loaded character map."""
