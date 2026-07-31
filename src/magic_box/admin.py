@@ -9,6 +9,7 @@ from io import BytesIO
 import logging
 import os
 from pathlib import Path
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ import time
 from typing import Any, Sequence
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, send_file, url_for
+from flask import Flask, flash, jsonify, make_response, redirect, render_template, request, send_file, url_for
 from werkzeug.datastructures import FileStorage
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
@@ -189,6 +190,8 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.secret_key = os.getenv("MAGIC_BOX_ADMIN_SECRET", "magic-character-box-local-dev")
+    recovery_csrf_token = secrets.token_urlsafe(32)
+    app.config["STORY_DOCK_RECOVERY_CSRF_TOKEN"] = recovery_csrf_token
     if _env_flag("MAGIC_BOX_TRUST_PROXY_HEADERS"):
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -337,29 +340,38 @@ def create_app(
                 404,
             )
 
-    def render_admin_dashboard() -> str:
+    def no_store_page(rendered_html: str):
+        response = make_response(rendered_html)
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+    def render_admin_dashboard():
         characters = _load_characters(resolved_config)
-        return render_template(
-            "admin.html",
-            characters=characters,
-            modes=sorted(VALID_MODES),
-            nfc_backend=nfc_backend,
-            nfc_error=nfc_error,
-            ffmpeg_available=shutil.which("ffmpeg") is not None,
-            audio_command=audio_command,
-            dry_run_audio=dry_run_audio,
-            trigger_file=trigger_file,
-            volume_percent=volume.get(),
-            volume_step=VOLUME_STEP_PERCENT,
-            guest_links=_load_guest_link_views(resolved_guest_links, resolved_config),
-            story_stickers=_load_story_sticker_views(resolved_story_stickers, resolved_config, story_sticker_base_url()),
-            suggested_guest_base_url=suggest_guest_base_url(),
-            last_tag=_last_tag_view(resolved_state, resolved_config),
-            recent_events=_event_views(resolved_state),
-            bluetooth_status=bluetooth.status().to_dict(),
-            wifi_status=wifi.status().to_dict(),
-            recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
-            mode_status=mode.status().to_dict(),
+        return no_store_page(
+            render_template(
+                "admin.html",
+                characters=characters,
+                modes=sorted(VALID_MODES),
+                nfc_backend=nfc_backend,
+                nfc_error=nfc_error,
+                ffmpeg_available=shutil.which("ffmpeg") is not None,
+                audio_command=audio_command,
+                dry_run_audio=dry_run_audio,
+                trigger_file=trigger_file,
+                volume_percent=volume.get(),
+                volume_step=VOLUME_STEP_PERCENT,
+                guest_links=_load_guest_link_views(resolved_guest_links, resolved_config),
+                story_stickers=_load_story_sticker_views(resolved_story_stickers, resolved_config, story_sticker_base_url()),
+                suggested_guest_base_url=suggest_guest_base_url(),
+                last_tag=_last_tag_view(resolved_state, resolved_config),
+                recent_events=_event_views(resolved_state),
+                bluetooth_status=bluetooth.status().to_dict(),
+                wifi_status=wifi.status().to_dict(),
+                recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
+                recovery_csrf_token=recovery_csrf_token,
+                mode_status=mode.status().to_dict(),
+            )
         )
 
     def recovery_page_enabled_for_request() -> bool:
@@ -408,13 +420,16 @@ def create_app(
         return render_admin_dashboard()
 
     @app.get("/reconnect")
-    def reconnect() -> str:
-        return render_template(
-            "reconnect.html",
-            wifi_status=wifi.status().to_dict(),
-            owner_url=os.getenv("STORY_DOCK_OWNER_URL", "https://tap.getstorydock.com/owner?tab=dock"),
-            recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
-            recovery_support_tools=_env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS"),
+    def reconnect():
+        return no_store_page(
+            render_template(
+                "reconnect.html",
+                wifi_status=wifi.status().to_dict(),
+                owner_url=os.getenv("STORY_DOCK_OWNER_URL", "https://tap.getstorydock.com/owner?tab=dock"),
+                recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
+                recovery_csrf_token=recovery_csrf_token,
+                recovery_support_tools=_env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS"),
+            )
         )
 
     @app.post("/characters")
@@ -1172,6 +1187,23 @@ def create_app(
     def wifi_recovery_password():
         if not _env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"):
             return jsonify({"ok": False, "message": "Setup Wi-Fi password changes are unavailable."}), 404
+        supplied_csrf_token = request.headers.get(
+            "X-Story-Dock-Recovery-CSRF",
+            "",
+        )
+        if (
+            not supplied_csrf_token
+            or not secrets.compare_digest(
+                supplied_csrf_token,
+                recovery_csrf_token,
+            )
+        ):
+            return jsonify(
+                {
+                    "ok": False,
+                    "message": "Reload this recovery page and try again.",
+                }
+            ), 403
         payload = _request_data()
         password = str(payload.get("password", ""))
         confirmation = str(payload.get("confirmation", ""))

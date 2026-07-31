@@ -27,6 +27,8 @@ class AdminTests(unittest.TestCase):
             response = client.get("/")
 
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
             self.assertIn(b"Magic Character Box", response.data)
             self.assertIn(b"Dinosaur", response.data)
             self.assertIn(b"Photo stories", response.data)
@@ -97,6 +99,8 @@ class AdminTests(unittest.TestCase):
             response = client.get("/reconnect")
 
             self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["Cache-Control"], "no-store")
+            self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
             self.assertIn(b"Reconnect Story Dock.", response.data)
             self.assertIn(b"Find Wi-Fi", response.data)
             self.assertIn(b"Reconnect Story Dock", response.data)
@@ -108,7 +112,7 @@ class AdminTests(unittest.TestCase):
             self.assertNotIn(b">Refresh</button>", response.data)
             self.assertIn(b"Show home Wi-Fi password", response.data)
             self.assertIn(b"Your memories stay saved.", response.data)
-            self.assertIn(b"Return to Story Dock Library", response.data)
+            self.assertIn(b"Return to My Story Dock", response.data)
             self.assertIn(b'aria-describedby="wifi-connect-status"', response.data)
             self.assertNotIn(b"favicon.svg", response.data)
             self.assertNotIn(b"I've got you", response.data)
@@ -125,11 +129,12 @@ class AdminTests(unittest.TestCase):
                 response = client.get("/reconnect")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn(b"Setup Wi-Fi password for this Story Dock", response.data)
-            self.assertIn(b"It does not change your home Wi-Fi password.", response.data)
-            self.assertIn(b"setup card will stop working for this dock", response.data)
-            self.assertIn(b"save it in your password manager", response.data)
+            self.assertIn(b"Change the Story Dock Setup password", response.data)
+            self.assertIn(b"It is separate from your home Wi-Fi password.", response.data)
+            self.assertIn(b"overrides the password on your setup card for this dock", response.data)
+            self.assertIn(b"Save the new password in your password manager", response.data)
             self.assertIn(b"Show new Setup Wi-Fi password", response.data)
+            self.assertIn(b"data-recovery-csrf=", response.data)
 
     def test_reconnect_page_support_tools_require_explicit_profile(self) -> None:
         with _temp_project() as root:
@@ -872,6 +877,11 @@ class AdminTests(unittest.TestCase):
                 response = client.post(
                     "/api/wifi/recovery-password",
                     json={"password": "new private pass", "confirmation": "new private pass"},
+                    headers={
+                        "X-Story-Dock-Recovery-CSRF": app.config[
+                            "STORY_DOCK_RECOVERY_CSRF_TOKEN"
+                        ]
+                    },
                 )
 
             self.assertEqual(response.status_code, 200)
@@ -896,12 +906,53 @@ class AdminTests(unittest.TestCase):
                 response = client.post(
                     "/api/wifi/recovery-password",
                     json={"password": "first password", "confirmation": "second password"},
+                    headers={
+                        "X-Story-Dock-Recovery-CSRF": app.config[
+                            "STORY_DOCK_RECOVERY_CSRF_TOKEN"
+                        ]
+                    },
                 )
 
             self.assertEqual(response.status_code, 400)
             payload = response.get_json()
             assert payload is not None
             self.assertEqual(payload["message"], "Setup Wi-Fi passwords do not match.")
+            self.assertEqual(wifi.recovery_password_calls, [])
+
+    def test_recovery_password_endpoint_requires_recovery_page_token(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
+                missing = client.post(
+                    "/api/wifi/recovery-password",
+                    json={
+                        "password": "new private pass",
+                        "confirmation": "new private pass",
+                    },
+                )
+                wrong = client.post(
+                    "/api/wifi/recovery-password",
+                    json={
+                        "password": "new private pass",
+                        "confirmation": "new private pass",
+                    },
+                    headers={"X-Story-Dock-Recovery-CSRF": "wrong-token"},
+                )
+
+            self.assertEqual(missing.status_code, 403)
+            self.assertEqual(wrong.status_code, 403)
+            self.assertEqual(
+                missing.get_json()["message"],
+                "Reload this recovery page and try again.",
+            )
             self.assertEqual(wifi.recovery_password_calls, [])
 
     def test_recovery_password_endpoint_is_closed_without_explicit_profile(self) -> None:

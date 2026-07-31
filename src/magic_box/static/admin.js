@@ -526,6 +526,7 @@ const wifiPanel = document.querySelector("[data-wifi-panel]");
 const bluetoothPanel = document.querySelector("[data-bluetooth-panel]");
 
 if (wifiPanel) {
+  const recoveryCsrfToken = wifiPanel.dataset.recoveryCsrf || "";
   const refreshButton = wifiPanel.querySelector("[data-wifi-refresh]");
   const scanButtonWifi = wifiPanel.querySelector("[data-wifi-scan]");
   const connectForm = wifiPanel.querySelector("[data-wifi-connect]");
@@ -631,7 +632,10 @@ if (wifiPanel) {
       busyText: "Saving...",
       statusTarget: recoveryPasswordStatus,
       fetchOptions: {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Story-Dock-Recovery-CSRF": recoveryCsrfToken,
+        },
         body: JSON.stringify({ password, confirmation }),
       },
     });
