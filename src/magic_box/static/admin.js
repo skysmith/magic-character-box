@@ -580,7 +580,10 @@ if (wifiPanel) {
       statusTarget: connectStatus,
       disconnectExpected: true,
       fetchOptions: {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Story-Dock-Recovery-CSRF": recoveryCsrfToken,
+        },
         body: JSON.stringify({ ssid, password }),
       },
     });

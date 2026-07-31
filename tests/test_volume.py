@@ -93,6 +93,7 @@ class VolumeTests(unittest.TestCase):
             self.assertEqual(report["volume_apply_status"], "applied")
             self.assertEqual(report["volume_applied_percent"], 60)
             self.assertEqual(report["volume_applied_revision"], 1)
+            self.assertEqual(report["volume_attempted_revision"], 1)
             self.assertEqual(
                 VolumeControl(path).story_dock_state(),
                 StoryDockVolumeState(60, 1),
@@ -112,7 +113,28 @@ class VolumeTests(unittest.TestCase):
 
             self.assertEqual(report["volume_apply_status"], "failed")
             self.assertEqual(report["volume_apply_reason"], "revision_regression")
+            self.assertEqual(report["volume_applied_revision"], 4)
+            self.assertEqual(report["volume_attempted_revision"], 3)
             self.assertEqual(path.read_bytes(), previous)
+
+    def test_failed_managed_apply_reports_attempted_and_prior_applied_revisions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "volume.json"
+
+            with patch.object(
+                VolumeControl,
+                "set_revisioned",
+                side_effect=VolumeFileError("write_failed"),
+            ):
+                report = apply_story_dock_volume_settings(
+                    path,
+                    {"managed": True, "desired_percent": 60, "revision": 1},
+                )
+
+            self.assertEqual(report["volume_apply_status"], "failed")
+            self.assertEqual(report["volume_apply_reason"], "write_failed")
+            self.assertEqual(report["volume_applied_revision"], 0)
+            self.assertEqual(report["volume_attempted_revision"], 1)
 
     def test_story_dock_settings_reject_corrupt_and_symlink_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -181,6 +203,7 @@ class VolumeTests(unittest.TestCase):
             self.assertEqual(report["volume_apply_status"], "unmanaged")
             self.assertEqual(report["volume_applied_percent"], 55)
             self.assertEqual(report["volume_applied_revision"], 0)
+            self.assertEqual(report["volume_attempted_revision"], 0)
             self.assertEqual(path.read_bytes(), previous)
 
     def test_first_unmanaged_setting_reports_default_without_creating_file(self) -> None:
@@ -192,6 +215,7 @@ class VolumeTests(unittest.TestCase):
             self.assertEqual(report["volume_apply_status"], "unmanaged")
             self.assertEqual(report["volume_applied_percent"], 50)
             self.assertEqual(report["volume_applied_revision"], 0)
+            self.assertEqual(report["volume_attempted_revision"], 0)
             self.assertFalse(path.exists())
 
     def test_apply_pipewire_volume_uses_wpctl_percent(self) -> None:

@@ -285,6 +285,7 @@ def apply_story_dock_volume_settings(
     """Apply one validated declarative volume block and return a bounded report."""
 
     control = VolumeControl(path, default_percent=default_percent)
+    attempted_revision = _candidate_attempted_revision(settings)
     try:
         current = control.story_dock_state()
     except VolumeFileError as exc:
@@ -292,6 +293,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=control.get(),
             revision=0,
+            attempted_revision=attempted_revision,
             reason=exc.reason,
         )
 
@@ -303,6 +305,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=current.volume_percent,
             revision=current.applied_revision,
+            attempted_revision=attempted_revision,
             reason="malformed_settings",
         )
     managed = settings.get("managed")
@@ -311,6 +314,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=current.volume_percent,
             revision=current.applied_revision,
+            attempted_revision=attempted_revision,
             reason="malformed_settings",
         )
     if not managed:
@@ -319,6 +323,7 @@ def apply_story_dock_volume_settings(
                 status="failed",
                 percent=current.volume_percent,
                 revision=current.applied_revision,
+                attempted_revision=attempted_revision,
                 reason="malformed_settings",
             )
         return _story_dock_volume_report(
@@ -342,6 +347,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=current.volume_percent,
             revision=current.applied_revision,
+            attempted_revision=attempted_revision,
             reason="malformed_settings",
         )
     if desired_revision < current.applied_revision:
@@ -349,6 +355,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=current.volume_percent,
             revision=current.applied_revision,
+            attempted_revision=desired_revision,
             reason="revision_regression",
         )
     if (
@@ -367,6 +374,7 @@ def apply_story_dock_volume_settings(
             status="failed",
             percent=current.volume_percent,
             revision=current.applied_revision,
+            attempted_revision=desired_revision,
             reason=exc.reason,
         )
     return _story_dock_volume_report(
@@ -381,15 +389,32 @@ def _story_dock_volume_report(
     status: str,
     percent: int,
     revision: int,
+    attempted_revision: int | None = None,
     reason: str = "",
 ) -> dict[str, Any]:
+    if attempted_revision is None and status in {"applied", "unmanaged"}:
+        attempted_revision = revision
     return {
         "volume_control_version": STORY_DOCK_VOLUME_CONTROL_VERSION,
         "volume_apply_status": status,
         "volume_applied_percent": clamp_volume(percent),
         "volume_applied_revision": max(0, int(revision)),
+        "volume_attempted_revision": (
+            max(0, int(attempted_revision))
+            if attempted_revision is not None
+            else None
+        ),
         "volume_apply_reason": reason,
     }
+
+
+def _candidate_attempted_revision(settings: Any) -> int | None:
+    if not isinstance(settings, dict):
+        return None
+    revision = settings.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        return None
+    return revision
 
 
 def volume_file_for_config(config_path: Path) -> Path:

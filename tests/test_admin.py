@@ -96,7 +96,7 @@ class AdminTests(unittest.TestCase):
             )
             client = app.test_client()
 
-            response = client.get("/reconnect")
+            response = client.get("/reconnect", base_url="http://10.42.0.1:8080")
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["Cache-Control"], "no-store")
@@ -120,13 +120,22 @@ class AdminTests(unittest.TestCase):
             self.assertNotIn(b"Teach character", response.data)
             self.assertNotIn(b"Bluetooth experiments", response.data)
 
+    def test_reconnect_page_is_not_exposed_on_the_normal_admin_host(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/reconnect")
+
+            self.assertEqual(response.status_code, 404)
+
     def test_reconnect_page_explains_editable_setup_password(self) -> None:
         with _temp_project() as root:
             app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
             client = app.test_client()
 
             with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
-                response = client.get("/reconnect")
+                response = client.get("/reconnect", base_url="http://10.42.0.1:8080")
 
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Change the Story Dock Setup password", response.data)
@@ -169,6 +178,17 @@ class AdminTests(unittest.TestCase):
             response = client.get("/api/wifi/status", base_url="http://10.42.0.1:8080")
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.get_json()["ok"])
+
+    def test_recovery_query_cannot_escape_to_full_admin(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            response = client.get("/?advanced=1", base_url="http://10.42.0.1:8080")
+
+            self.assertEqual(response.status_code, 302)
+            self.assertTrue(response.headers["Location"].endswith("/reconnect"))
+            self.assertNotIn(b"Magic Character Box", response.data)
 
     def test_explicit_recovery_support_profile_keeps_full_admin_available(self) -> None:
         with _temp_project() as root:
@@ -853,7 +873,15 @@ class AdminTests(unittest.TestCase):
             )
             client = app.test_client()
 
-            response = client.post("/api/wifi/connect", json={"ssid": "Mini Cottage", "password": "private pass"})
+            response = client.post(
+                "/api/wifi/connect",
+                json={"ssid": "Mini Cottage", "password": "private pass"},
+                headers={
+                    "X-Story-Dock-Recovery-CSRF": app.config[
+                        "STORY_DOCK_RECOVERY_CSRF_TOKEN"
+                    ]
+                },
+            )
 
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
@@ -861,6 +889,26 @@ class AdminTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(wifi.connect_calls, [("Mini Cottage", "private pass")])
             self.assertNotIn("private pass", json.dumps(payload))
+
+    def test_wifi_connect_endpoint_requires_recovery_page_token(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            response = client.post(
+                "/api/wifi/connect",
+                data={"ssid": "Mini Cottage", "password": "private pass"},
+            )
+
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.get_json()["message"], "Reload this recovery page and try again.")
+            self.assertEqual(wifi.connect_calls, [])
 
     def test_recovery_password_endpoint_updates_without_echoing_secret(self) -> None:
         with _temp_project() as root:
@@ -877,6 +925,7 @@ class AdminTests(unittest.TestCase):
                 response = client.post(
                     "/api/wifi/recovery-password",
                     json={"password": "new private pass", "confirmation": "new private pass"},
+                    base_url="http://10.42.0.1:8080",
                     headers={
                         "X-Story-Dock-Recovery-CSRF": app.config[
                             "STORY_DOCK_RECOVERY_CSRF_TOKEN"
@@ -906,6 +955,7 @@ class AdminTests(unittest.TestCase):
                 response = client.post(
                     "/api/wifi/recovery-password",
                     json={"password": "first password", "confirmation": "second password"},
+                    base_url="http://10.42.0.1:8080",
                     headers={
                         "X-Story-Dock-Recovery-CSRF": app.config[
                             "STORY_DOCK_RECOVERY_CSRF_TOKEN"
@@ -937,6 +987,7 @@ class AdminTests(unittest.TestCase):
                         "password": "new private pass",
                         "confirmation": "new private pass",
                     },
+                    base_url="http://10.42.0.1:8080",
                 )
                 wrong = client.post(
                     "/api/wifi/recovery-password",
@@ -944,6 +995,7 @@ class AdminTests(unittest.TestCase):
                         "password": "new private pass",
                         "confirmation": "new private pass",
                     },
+                    base_url="http://10.42.0.1:8080",
                     headers={"X-Story-Dock-Recovery-CSRF": "wrong-token"},
                 )
 
@@ -953,6 +1005,31 @@ class AdminTests(unittest.TestCase):
                 missing.get_json()["message"],
                 "Reload this recovery page and try again.",
             )
+            self.assertEqual(wifi.recovery_password_calls, [])
+
+    def test_recovery_password_endpoint_is_closed_on_normal_host_even_when_editable(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
+                response = client.post(
+                    "/api/wifi/recovery-password",
+                    json={"password": "new private pass", "confirmation": "new private pass"},
+                    headers={
+                        "X-Story-Dock-Recovery-CSRF": app.config[
+                            "STORY_DOCK_RECOVERY_CSRF_TOKEN"
+                        ]
+                    },
+                )
+
+            self.assertEqual(response.status_code, 404)
             self.assertEqual(wifi.recovery_password_calls, [])
 
     def test_recovery_password_endpoint_is_closed_without_explicit_profile(self) -> None:

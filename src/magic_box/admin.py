@@ -368,7 +368,10 @@ def create_app(
                 recent_events=_event_views(resolved_state),
                 bluetooth_status=bluetooth.status().to_dict(),
                 wifi_status=wifi.status().to_dict(),
-                recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
+                recovery_password_editable=(
+                    _env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE")
+                    and _env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS")
+                ),
                 recovery_csrf_token=recovery_csrf_token,
                 mode_status=mode.status().to_dict(),
             )
@@ -381,9 +384,32 @@ def create_app(
         recovery_hosts = os.getenv("MAGIC_BOX_RECOVERY_HOSTS", DEFAULT_RECOVERY_HOSTS)
         return host in {item.strip().lower() for item in recovery_hosts.split(",") if item.strip()}
 
+    def recovery_support_tools_enabled() -> bool:
+        return _env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS")
+
+    def recovery_mutation_allowed() -> bool:
+        return recovery_page_enabled_for_request() or recovery_support_tools_enabled()
+
+    def recovery_csrf_denial():
+        supplied_csrf_token = request.headers.get(
+            "X-Story-Dock-Recovery-CSRF",
+            "",
+        )
+        if supplied_csrf_token and secrets.compare_digest(
+            supplied_csrf_token,
+            recovery_csrf_token,
+        ):
+            return None
+        return jsonify(
+            {
+                "ok": False,
+                "message": "Reload this recovery page and try again.",
+            }
+        ), 403
+
     @app.before_request
     def restrict_recovery_surface():
-        if not recovery_page_enabled_for_request() or _env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS"):
+        if not recovery_page_enabled_for_request() or recovery_support_tools_enabled():
             return None
         endpoint = request.endpoint or ""
         if endpoint in {
@@ -411,7 +437,7 @@ def create_app(
 
     @app.get("/")
     def index():
-        if recovery_page_enabled_for_request() and request.args.get("advanced") not in {"1", "true", "yes"}:
+        if recovery_page_enabled_for_request() and not recovery_support_tools_enabled():
             return redirect(url_for("reconnect"))
         return render_admin_dashboard()
 
@@ -421,6 +447,8 @@ def create_app(
 
     @app.get("/reconnect")
     def reconnect():
+        if not recovery_mutation_allowed():
+            return "Not found", 404
         return no_store_page(
             render_template(
                 "reconnect.html",
@@ -1176,6 +1204,9 @@ def create_app(
 
     @app.post("/api/wifi/connect")
     def wifi_connect():
+        csrf_denial = recovery_csrf_denial()
+        if csrf_denial is not None:
+            return csrf_denial
         payload = _request_data()
         try:
             result = wifi.connect(str(payload.get("ssid", "")), str(payload.get("password", "")))
@@ -1185,25 +1216,14 @@ def create_app(
 
     @app.post("/api/wifi/recovery-password")
     def wifi_recovery_password():
-        if not _env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"):
-            return jsonify({"ok": False, "message": "Setup Wi-Fi password changes are unavailable."}), 404
-        supplied_csrf_token = request.headers.get(
-            "X-Story-Dock-Recovery-CSRF",
-            "",
-        )
         if (
-            not supplied_csrf_token
-            or not secrets.compare_digest(
-                supplied_csrf_token,
-                recovery_csrf_token,
-            )
+            not recovery_mutation_allowed()
+            or not _env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE")
         ):
-            return jsonify(
-                {
-                    "ok": False,
-                    "message": "Reload this recovery page and try again.",
-                }
-            ), 403
+            return jsonify({"ok": False, "message": "Setup Wi-Fi password changes are unavailable."}), 404
+        csrf_denial = recovery_csrf_denial()
+        if csrf_denial is not None:
+            return csrf_denial
         payload = _request_data()
         password = str(payload.get("password", ""))
         confirmation = str(payload.get("confirmation", ""))
