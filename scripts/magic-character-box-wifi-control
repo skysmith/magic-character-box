@@ -5,9 +5,15 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
+
+
+RECOVERY_ENV = Path(os.getenv("STORY_DOCK_SETUP_HOTSPOT_ENV", "/etc/story-dock/setup-hotspot.env"))
+RECOVERY_CONNECTION = os.getenv("STORY_DOCK_SETUP_HOTSPOT_CONNECTION", "story-dock-setup-hotspot")
 
 
 def main() -> int:
@@ -21,6 +27,8 @@ def main() -> int:
     connect = subparsers.add_parser("connect")
     connect.add_argument("ssid")
     connect.add_argument("password", nargs="?", default="")
+    recovery_password = subparsers.add_parser("set-recovery-password")
+    recovery_password.add_argument("password")
 
     args = parser.parse_args()
     nmcli = shutil.which("nmcli") or "/usr/bin/nmcli"
@@ -45,6 +53,9 @@ def main() -> int:
         if password:
             command.extend(["password", password])
         return run_command(command)
+    if args.command == "set-recovery-password":
+        password = validate_recovery_password(args.password)
+        return set_recovery_password(nmcli, password)
 
     return 2
 
@@ -53,6 +64,67 @@ def validate_value(value: str, label: str) -> str:
     if any(char in value for char in "\x00\n\r"):
         raise SystemExit(f"{label} contains unsupported characters.")
     return value
+
+
+def validate_recovery_password(value: str) -> str:
+    password = validate_value(value, "Recovery Wi-Fi password")
+    if not 8 <= len(password) <= 63:
+        raise SystemExit("Recovery Wi-Fi password must be 8–63 characters.")
+    return password
+
+
+def set_recovery_password(nmcli: str, password: str) -> int:
+    if not RECOVERY_ENV.is_file():
+        print("Story Dock recovery Wi-Fi is not configured.", file=sys.stderr)
+        return 2
+
+    lines = RECOVERY_ENV.read_text(encoding="utf-8").splitlines()
+    replacement = f"STORY_DOCK_SETUP_HOTSPOT_PSK={shell_single_quote(password)}"
+    updated: list[str] = []
+    replaced = False
+    for line in lines:
+        if line.startswith("STORY_DOCK_SETUP_HOTSPOT_PSK="):
+            if replaced:
+                print("Story Dock recovery configuration contains duplicate password entries.", file=sys.stderr)
+                return 2
+            updated.append(replacement)
+            replaced = True
+        else:
+            updated.append(line)
+    if not replaced:
+        updated.append(replacement)
+
+    RECOVERY_ENV.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".setup-hotspot.", dir=RECOVERY_ENV.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(updated) + "\n")
+        os.chmod(temporary_name, 0o600)
+        os.replace(temporary_name, RECOVERY_ENV)
+    finally:
+        if os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+    connection = subprocess.run(
+        [nmcli, "-t", "-f", "NAME", "connection", "show"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if connection.returncode != 0:
+        return connection.returncode
+    if RECOVERY_CONNECTION in connection.stdout.splitlines():
+        changed = subprocess.run(
+            [nmcli, "connection", "modify", RECOVERY_CONNECTION, "wifi-sec.psk", password],
+            check=False,
+        )
+        if changed.returncode != 0:
+            return changed.returncode
+    return 0
+
+
+def shell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def run(nmcli: str, *args: str) -> int:

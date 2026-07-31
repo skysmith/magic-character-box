@@ -317,6 +317,13 @@ full admin page on a trusted local network or trusted Tailscale HTTPS, because
 it still has maintenance controls such as shutdown, backups, scanning, and
 network changes.
 
+When an integrator supplies the privileged recovery helper and explicitly sets
+`MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE=1`, the reconnect page and full local
+dashboard also offer **Change Story Dock Setup Wi-Fi password**. The form
+requires an 8–63 character value and confirmation, never echoes the value in
+the API response, and updates the password used the next time the setup hotspot
+starts. It does not change the selected home Wi-Fi password.
+
 ## Experimental Bluetooth Socket
 
 The Pi Zero 2 W can play to Bluetooth speakers, but Bluetooth is not part of the recommended main build. Treat it as an experimental socket for contributors and prototypes. The finished kid box should keep the MAX98357A plus passive speaker as the reliable built-in path.

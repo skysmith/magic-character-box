@@ -16,24 +16,24 @@
             <img src="{{ url_for('static', filename='story-dock-logo.svg') }}" alt="">
             <span aria-hidden="true">Story Dock</span>
           </div>
-          <span class="reconnect-mode-status" aria-label="Device status: setup mode">
+          <span class="reconnect-mode-status" aria-label="Setup mode">
             <span class="reconnect-status-dot" aria-hidden="true"></span>
-            <span aria-hidden="true">Status</span>
-            <strong aria-hidden="true">Setup mode</strong>
+            <strong>Setup mode</strong>
           </span>
         </header>
 
         <div class="reconnect-copy">
           <p class="label">Wi-Fi recovery</p>
-          <h1 id="reconnect-title">Let's reconnect your Story Dock.</h1>
+          <h1 id="reconnect-title">Reconnect Story Dock.</h1>
           <p class="reconnect-lede">
-            Choose Wi-Fi and the dock will take it from here. Your stories and stickers stay saved.
+            Choose this location's Wi-Fi. Your phone will disconnect from Story Dock Setup when it succeeds.
+            Your memories stay saved.
           </p>
         </div>
 
         <div class="reconnect-status-strip" aria-label="Current Wi-Fi status">
           <div>
-            <p class="label">Network</p>
+            <p class="label">Current connection</p>
             <p class="status-value" data-wifi-ssid>{{ wifi_status.ssid or "setup mode" }}</p>
           </div>
           <p class="muted" data-wifi-message>{{ wifi_status.message }}</p>
@@ -42,12 +42,42 @@
           <span class="visually-hidden" data-wifi-count>{{ wifi_status.networks|length }}</span>
         </div>
 
-        <div class="reconnect-actions">
-          <button class="button" type="button" data-wifi-scan {% if not wifi_status.available %}disabled{% endif %}>Find Wi-Fi</button>
-          <button class="button button-secondary" type="button" data-wifi-refresh>Refresh</button>
+        <div class="reconnect-step" data-reconnect-controls>
+          <span aria-hidden="true">1</span>
+          <strong>Choose this location's Wi-Fi</strong>
         </div>
 
-        <form class="reconnect-form" data-wifi-connect>
+        <div class="reconnect-actions" data-reconnect-controls>
+          <button class="button" type="button" data-wifi-scan {% if not wifi_status.available %}disabled{% endif %}>Find Wi-Fi</button>
+        </div>
+
+        <p class="muted wifi-action-status" data-wifi-status role="status" aria-live="polite">
+          Story Dock uses 2.4 GHz Wi-Fi.
+        </p>
+
+        <h2 class="visually-hidden">Available Wi-Fi networks</h2>
+        <div class="wifi-network-list reconnect-network-list" data-wifi-networks role="list">
+          {% for network in wifi_status.networks %}
+            <article class="wifi-network" data-wifi-network-ssid="{{ network.ssid }}" role="listitem">
+              <div>
+                <h3>{{ network.ssid }}</h3>
+                <p class="muted">{{ network.signal or "unknown" }}% signal{% if network.security %} · {{ network.security }}{% endif %}</p>
+                <p class="tag-list">
+                  {% if network.active %}<span>connected</span>{% endif %}
+                </p>
+              </div>
+              <button class="button button-secondary" type="button" aria-label="Choose {{ network.ssid }}" data-wifi-use-network>Choose</button>
+            </article>
+          {% else %}
+            <p class="empty-state">No networks listed yet. Tap Find Wi-Fi.</p>
+          {% endfor %}
+        </div>
+
+        <form class="reconnect-form" data-wifi-connect data-reconnect-controls>
+          <div class="reconnect-step">
+            <span aria-hidden="true">2</span>
+            <strong>Enter this Wi-Fi password</strong>
+          </div>
           <label>
             <span class="field-label">Wi-Fi network</span>
             <input
@@ -56,6 +86,8 @@
               autocomplete="off"
               placeholder="Home Wi-Fi"
               required
+              aria-describedby="wifi-connect-status"
+              aria-invalid="false"
               data-wifi-ssid-input
             >
             <datalist id="wifi-network-options" data-wifi-options>
@@ -64,43 +96,59 @@
               {% endfor %}
             </datalist>
           </label>
-          <label>
-            <span class="field-label">Password</span>
-            <input name="password" type="password" autocomplete="current-password" placeholder="Wi-Fi password" data-wifi-password-input>
-          </label>
+          <div class="field-group">
+            <label class="field-label" for="home-wifi-password">Home Wi-Fi password</label>
+            <div class="password-input-wrap">
+              <input id="home-wifi-password" name="password" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Password for this Wi-Fi" aria-describedby="wifi-connect-status" aria-invalid="false" data-wifi-password-input>
+              <button class="password-toggle" type="button" aria-label="Show home Wi-Fi password" data-password-toggle data-password-show-label="Show home Wi-Fi password" data-password-hide-label="Hide home Wi-Fi password">Show</button>
+            </div>
+          </div>
           <button class="button reconnect-submit" type="submit" {% if not wifi_status.available %}disabled{% endif %} data-wifi-connect-button>
             Reconnect Story Dock
           </button>
+          <p class="muted form-action-status" id="wifi-connect-status" data-wifi-connect-status role="status" aria-live="polite"></p>
         </form>
 
         <div class="reconnect-success" data-reconnect-success hidden>
-          <strong>Story Dock is switching networks.</strong>
-          <span>If this page stops loading, setup usually worked. Rejoin your normal Wi-Fi and open Library.</span>
-          <a class="text-link" href="{{ owner_url }}">Open Library</a>
+          <strong data-reconnect-heading>Story Dock is connecting.</strong>
+          <span>This page may close. On your phone, rejoin <strong data-reconnect-target>your home Wi-Fi</strong>, then open Library.</span>
+          <a class="text-link" href="{{ owner_url }}">Return to Story Dock Library</a>
         </div>
 
-        <p class="muted wifi-action-status" data-wifi-status role="status" aria-live="polite">
-          Find your Wi-Fi network, or type its name.
-        </p>
-
-        <div class="wifi-network-list reconnect-network-list" data-wifi-networks>
-          {% for network in wifi_status.networks %}
-            <article class="wifi-network" data-wifi-network-ssid="{{ network.ssid }}">
-              <div>
-                <h3>{{ network.ssid }}</h3>
-                <p class="muted">{{ network.signal or "unknown" }}% signal{% if network.security %} · {{ network.security }}{% endif %}</p>
-                <p class="tag-list">
-                  {% if network.active %}<span>connected</span>{% endif %}
-                </p>
+        {% if recovery_password_editable %}
+        <details class="reconnect-advanced">
+          <summary>Setup Wi-Fi password for this Story Dock</summary>
+          <form class="reconnect-form" data-recovery-password-form>
+            <p class="muted">
+              Change this only if you want a different password for joining Story Dock Setup next time.
+              It does not change your home Wi-Fi password.
+            </p>
+            <p class="password-guidance" id="recovery-password-guidance">
+              The password on your setup card will stop working for this dock. Story Dock support cannot retrieve the replacement,
+              so save it in your password manager. Use 8–63 characters.
+            </p>
+            <div class="field-group">
+              <label class="field-label" for="recovery-password">New Setup Wi-Fi password</label>
+              <div class="password-input-wrap">
+                <input id="recovery-password" name="password" type="password" autocomplete="new-password" minlength="8" maxlength="63" required aria-describedby="recovery-password-guidance recovery-password-status" aria-invalid="false" data-recovery-password>
+                <button class="password-toggle" type="button" aria-label="Show new Setup Wi-Fi password" data-password-toggle data-password-show-label="Show new Setup Wi-Fi password" data-password-hide-label="Hide new Setup Wi-Fi password">Show</button>
               </div>
-              <button class="button button-secondary" type="button" data-wifi-use-network>Choose</button>
-            </article>
-          {% else %}
-            <p class="empty-state">No networks listed yet. Tap Find Wi-Fi.</p>
-          {% endfor %}
-        </div>
+            </div>
+            <div class="field-group">
+              <label class="field-label" for="recovery-password-confirmation">Confirm new password</label>
+              <div class="password-input-wrap">
+                <input id="recovery-password-confirmation" name="confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="63" required aria-describedby="recovery-password-guidance recovery-password-status" aria-invalid="false" data-recovery-password-confirmation>
+                <button class="password-toggle" type="button" aria-label="Show password confirmation" data-password-toggle data-password-show-label="Show password confirmation" data-password-hide-label="Hide password confirmation">Show</button>
+              </div>
+            </div>
+            <button class="button button-secondary" type="submit" data-recovery-password-button>Save Setup Wi-Fi password</button>
+            <p class="muted form-action-status" id="recovery-password-status" data-recovery-password-status role="status" aria-live="polite"></p>
+          </form>
+        </details>
+        {% endif %}
       </section>
 
+      {% if recovery_support_tools %}
       <details class="reconnect-advanced">
         <summary>Support tools</summary>
         <div>
@@ -108,6 +156,7 @@
           <a class="button button-secondary" href="{{ url_for('admin_dashboard') }}">Open full admin</a>
         </div>
       </details>
+      {% endif %}
     </main>
 
     <script src="{{ url_for('static', filename='admin.js') }}"></script>

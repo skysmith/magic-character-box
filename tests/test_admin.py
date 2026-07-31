@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -96,26 +97,81 @@ class AdminTests(unittest.TestCase):
             response = client.get("/reconnect")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn(b"Let's reconnect your Story Dock.", response.data)
+            self.assertIn(b"Reconnect Story Dock.", response.data)
             self.assertIn(b"Find Wi-Fi", response.data)
             self.assertIn(b"Reconnect Story Dock", response.data)
             self.assertIn(b"story-dock-logo.svg", response.data)
             self.assertIn(b"story-dock-app-icon-192.png", response.data)
-            self.assertIn(b"Device status: setup mode", response.data)
-            self.assertIn(b"Open full admin", response.data)
-            self.assertIn(b"Your stories and stickers stay saved.", response.data)
+            self.assertIn(b"Setup mode", response.data)
+            self.assertNotIn(b"Open full admin", response.data)
+            self.assertNotIn(b"Support tools", response.data)
+            self.assertNotIn(b">Refresh</button>", response.data)
+            self.assertIn(b"Show home Wi-Fi password", response.data)
+            self.assertIn(b"Your memories stay saved.", response.data)
+            self.assertIn(b"Return to Story Dock Library", response.data)
+            self.assertIn(b'aria-describedby="wifi-connect-status"', response.data)
             self.assertNotIn(b"favicon.svg", response.data)
             self.assertNotIn(b"I've got you", response.data)
             self.assertNotIn(b"Photo stories", response.data)
             self.assertNotIn(b"Teach character", response.data)
             self.assertNotIn(b"Bluetooth experiments", response.data)
 
-    def test_full_admin_still_available_from_recovery_page(self) -> None:
+    def test_reconnect_page_explains_editable_setup_password(self) -> None:
         with _temp_project() as root:
             app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
             client = app.test_client()
 
-            response = client.get("/admin", base_url="http://10.42.0.1:8080")
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
+                response = client.get("/reconnect")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Setup Wi-Fi password for this Story Dock", response.data)
+            self.assertIn(b"It does not change your home Wi-Fi password.", response.data)
+            self.assertIn(b"setup card will stop working for this dock", response.data)
+            self.assertIn(b"save it in your password manager", response.data)
+            self.assertIn(b"Show new Setup Wi-Fi password", response.data)
+
+    def test_reconnect_page_support_tools_require_explicit_profile(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_SUPPORT_TOOLS": "1"}):
+                response = client.get("/reconnect")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"Support tools", response.data)
+            self.assertIn(b"Open full admin", response.data)
+
+    def test_recovery_mode_blocks_full_admin_and_unrelated_device_routes(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            blocked = (
+                ("GET", "/admin"),
+                ("GET", "/backup.zip"),
+                ("GET", "/api/bluetooth/status"),
+                ("POST", "/shutdown"),
+                ("POST", "/volume"),
+                ("POST", "/characters"),
+            )
+            for method, path in blocked:
+                with self.subTest(path=path):
+                    response = client.open(path, method=method, base_url="http://10.42.0.1:8080")
+                    self.assertEqual(response.status_code, 404)
+
+            response = client.get("/api/wifi/status", base_url="http://10.42.0.1:8080")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["ok"])
+
+    def test_explicit_recovery_support_profile_keeps_full_admin_available(self) -> None:
+        with _temp_project() as root:
+            app = create_app(root / "config" / "characters.json", nfc_backend="mock", dry_run_audio=True)
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_SUPPORT_TOOLS": "1"}):
+                response = client.get("/admin", base_url="http://10.42.0.1:8080")
 
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Magic Character Box", response.data)
@@ -801,6 +857,72 @@ class AdminTests(unittest.TestCase):
             self.assertEqual(wifi.connect_calls, [("Mini Cottage", "private pass")])
             self.assertNotIn("private pass", json.dumps(payload))
 
+    def test_recovery_password_endpoint_updates_without_echoing_secret(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
+                response = client.post(
+                    "/api/wifi/recovery-password",
+                    json={"password": "new private pass", "confirmation": "new private pass"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertTrue(payload["ok"])
+            self.assertEqual(wifi.recovery_password_calls, ["new private pass"])
+            self.assertNotIn("new private pass", json.dumps(payload))
+
+    def test_recovery_password_endpoint_rejects_mismatch(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            with patch.dict(os.environ, {"MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE": "1"}):
+                response = client.post(
+                    "/api/wifi/recovery-password",
+                    json={"password": "first password", "confirmation": "second password"},
+                )
+
+            self.assertEqual(response.status_code, 400)
+            payload = response.get_json()
+            assert payload is not None
+            self.assertEqual(payload["message"], "Setup Wi-Fi passwords do not match.")
+            self.assertEqual(wifi.recovery_password_calls, [])
+
+    def test_recovery_password_endpoint_is_closed_without_explicit_profile(self) -> None:
+        with _temp_project() as root:
+            wifi = _FakeWifiController()
+            app = create_app(
+                root / "config" / "characters.json",
+                nfc_backend="mock",
+                dry_run_audio=True,
+                wifi_controller=wifi,
+            )
+            client = app.test_client()
+
+            response = client.post(
+                "/api/wifi/recovery-password",
+                json={"password": "new private pass", "confirmation": "new private pass"},
+            )
+
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(wifi.recovery_password_calls, [])
+
     def test_bluetooth_device_action_validates_action(self) -> None:
         with _temp_project() as root:
             app = create_app(
@@ -1011,6 +1133,7 @@ class _FakeBluetoothController:
 class _FakeWifiController:
     def __init__(self) -> None:
         self.connect_calls: list[tuple[str, str]] = []
+        self.recovery_password_calls: list[str] = []
 
     def status(self) -> WifiStatus:
         return WifiStatus(
@@ -1054,6 +1177,14 @@ class _FakeWifiController:
                 ssid=ssid,
                 device="wlan0",
             ),
+        )
+
+    def change_recovery_password(self, password: str) -> WifiActionResult:
+        self.recovery_password_calls.append(password)
+        return WifiActionResult(
+            ok=True,
+            message="Setup Wi-Fi password updated for the next setup session.",
+            status=self.status(),
         )
 
 

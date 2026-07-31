@@ -77,6 +77,7 @@ main {
   box-shadow: 0 18px 56px rgb(53 43 31 / 7%);
   display: grid;
   gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   padding: 38px;
   width: 100%;
@@ -144,7 +145,7 @@ main {
 }
 
 .reconnect-copy h1 {
-  font-size: 3.15rem;
+  font-size: 2.85rem;
   font-weight: 820;
   letter-spacing: 0;
   line-height: 0.98;
@@ -181,6 +182,30 @@ main {
 
 .reconnect-actions .button {
   flex: 1 1 150px;
+}
+
+.reconnect-step {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.reconnect-step > span {
+  align-items: center;
+  background: var(--text-primary);
+  border-radius: 999px;
+  color: #ffffff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  font-weight: 850;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
+
+.reconnect-step strong {
+  font-size: 1rem;
 }
 
 .reconnect-form {
@@ -225,7 +250,11 @@ main {
 .reconnect-advanced summary {
   color: var(--text-secondary);
   cursor: pointer;
+  display: block;
   font-weight: 800;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .reconnect-advanced > div {
@@ -236,6 +265,58 @@ main {
   padding-top: 14px;
 }
 
+.reconnect-advanced > form {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 12px;
+  padding-top: 14px;
+}
+
+.field-group {
+  display: grid;
+}
+
+.password-input-wrap {
+  position: relative;
+}
+
+.password-input-wrap input {
+  padding-right: 76px;
+  width: 100%;
+}
+
+.password-toggle {
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.92rem;
+  font-weight: 800;
+  min-height: 44px;
+  padding: 0 14px;
+  position: absolute;
+  right: 3px;
+  top: 3px;
+}
+
+.password-toggle:focus-visible {
+  border-radius: 8px;
+  outline: 3px solid rgb(37 99 235 / 24%);
+}
+
+.password-guidance {
+  color: var(--text-secondary);
+  font-size: 0.94rem;
+}
+
+.form-action-status {
+  min-height: 0;
+}
+
+.form-action-status:not(:empty) {
+  border-left: 3px solid var(--border-strong);
+  padding-left: 10px;
+}
+
 .reconnect-page input {
   background: #ffffff;
   border-color: var(--border-subtle);
@@ -243,9 +324,23 @@ main {
   min-height: 50px;
 }
 
+.reconnect-card > *,
+.reconnect-form > *,
+.reconnect-actions > * {
+  min-width: 0;
+}
+
 .reconnect-page input:focus {
   border-color: #166534;
   outline: 3px solid rgb(102 124 103 / 16%);
+}
+
+.reconnect-page input[aria-invalid="true"] {
+  border-color: var(--state-danger);
+}
+
+.reconnect-page input[aria-invalid="true"]:focus {
+  outline-color: rgb(153 27 27 / 16%);
 }
 
 .reconnect-page .button {
@@ -1323,7 +1418,8 @@ summary {
   }
 
   .reconnect-copy h1 {
-    font-size: 2.35rem;
+    font-size: 2.05rem;
+    line-height: 1.04;
   }
 
   .reconnect-lede {
@@ -1333,6 +1429,11 @@ summary {
   .reconnect-actions .button,
   .reconnect-form .button {
     width: 100%;
+  }
+
+  .reconnect-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .last-tag-card {

@@ -482,13 +482,32 @@
             </datalist>
           </label>
           <label>
-            <span class="field-label">Password</span>
-            <input name="password" type="password" autocomplete="current-password" data-wifi-password-input>
+            <span class="field-label">Home Wi-Fi password</span>
+            <input name="password" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" data-wifi-password-input>
           </label>
           <button class="button" type="submit" {% if not wifi_status.available %}disabled{% endif %} data-wifi-connect-button>Connect</button>
         </form>
 
         <p class="muted wifi-action-status" data-wifi-status role="status" aria-live="polite"></p>
+
+        {% if recovery_password_editable %}
+        <details class="reconnect-advanced">
+          <summary>Change Story Dock Setup Wi-Fi password</summary>
+          <form class="wifi-connect-form" data-recovery-password-form>
+            <label>
+              <span class="field-label">New Setup Wi-Fi password</span>
+              <input name="password" type="password" autocomplete="new-password" minlength="8" maxlength="63" required data-recovery-password>
+            </label>
+            <label>
+              <span class="field-label">Confirm new password</span>
+              <input name="confirmation" type="password" autocomplete="new-password" minlength="8" maxlength="63" required data-recovery-password-confirmation>
+            </label>
+            <button class="button button-secondary" type="submit" data-recovery-password-button>Save Setup Wi-Fi password</button>
+            <p class="muted form-action-status" data-recovery-password-status role="status" aria-live="polite"></p>
+          </form>
+          <p class="muted">Use this password the next time you join Story Dock Setup. It does not change your home Wi-Fi password.</p>
+        </details>
+        {% endif %}
 
         <div class="wifi-network-list" data-wifi-networks>
           {% for network in wifi_status.networks %}

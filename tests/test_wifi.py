@@ -72,6 +72,48 @@ class WifiControllerTests(unittest.TestCase):
             ("/usr/local/bin/magic-character-box-wifi-control", "connect", "Mini Cottage", "private pass"),
         )
 
+    def test_change_recovery_password_uses_helper_without_leaking_password(self) -> None:
+        runner = _FakeRunner(
+            {
+                (
+                    "/usr/local/bin/magic-character-box-wifi-control",
+                    "set-recovery-password",
+                    "new private pass",
+                ): subprocess.CompletedProcess([], 0, "", ""),
+                ("/usr/local/bin/magic-character-box-wifi-control", "radio-status"): subprocess.CompletedProcess(
+                    [], 0, "enabled\n", ""
+                ),
+                ("/usr/local/bin/magic-character-box-wifi-control", "device-status"): subprocess.CompletedProcess(
+                    [], 0, "wlan0:wifi:connected:story-dock-setup-hotspot\n", ""
+                ),
+            }
+        )
+        controller = WifiController(
+            nmcli=None,
+            helper="/usr/local/bin/magic-character-box-wifi-control",
+            sudo="",
+            runner=runner,
+        )
+
+        result = controller.change_recovery_password("new private pass")
+
+        self.assertTrue(result.ok)
+        self.assertNotIn("new private pass", result.message)
+        self.assertEqual(
+            runner.commands[0],
+            (
+                "/usr/local/bin/magic-character-box-wifi-control",
+                "set-recovery-password",
+                "new private pass",
+            ),
+        )
+
+    def test_change_recovery_password_rejects_invalid_length(self) -> None:
+        controller = WifiController(nmcli="/usr/bin/nmcli", helper=None, sudo="")
+
+        with self.assertRaisesRegex(ValueError, "8–63"):
+            controller.change_recovery_password("short")
+
 
 class _FakeRunner:
     def __init__(self, results: dict[tuple[str, ...], subprocess.CompletedProcess[str]]) -> None:

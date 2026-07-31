@@ -358,6 +358,7 @@ def create_app(
             recent_events=_event_views(resolved_state),
             bluetooth_status=bluetooth.status().to_dict(),
             wifi_status=wifi.status().to_dict(),
+            recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
             mode_status=mode.status().to_dict(),
         )
 
@@ -367,6 +368,23 @@ def create_app(
         host = request.host.split(":", 1)[0].strip().lower()
         recovery_hosts = os.getenv("MAGIC_BOX_RECOVERY_HOSTS", DEFAULT_RECOVERY_HOSTS)
         return host in {item.strip().lower() for item in recovery_hosts.split(",") if item.strip()}
+
+    @app.before_request
+    def restrict_recovery_surface():
+        if not recovery_page_enabled_for_request() or _env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS"):
+            return None
+        endpoint = request.endpoint or ""
+        if endpoint in {
+            "index",
+            "reconnect",
+            "static",
+            "wifi_status",
+            "wifi_scan",
+            "wifi_connect",
+            "wifi_recovery_password",
+        } or endpoint.startswith("captive_portal_probe_"):
+            return None
+        return "Not found", 404
 
     def captive_portal_probe():
         return redirect(url_for("reconnect"), code=302)
@@ -395,6 +413,8 @@ def create_app(
             "reconnect.html",
             wifi_status=wifi.status().to_dict(),
             owner_url=os.getenv("STORY_DOCK_OWNER_URL", "https://tap.getstorydock.com/owner?tab=dock"),
+            recovery_password_editable=_env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"),
+            recovery_support_tools=_env_flag("MAGIC_BOX_RECOVERY_SUPPORT_TOOLS"),
         )
 
     @app.post("/characters")
@@ -1145,7 +1165,22 @@ def create_app(
         try:
             result = wifi.connect(str(payload.get("ssid", "")), str(payload.get("password", "")))
         except ValueError as exc:
-            return jsonify({"ok": False, "message": str(exc), **wifi.status().to_dict()}), 400
+            return jsonify({**wifi.status().to_dict(), "ok": False, "message": str(exc)}), 400
+        return jsonify(result.to_dict()), 200 if result.ok else 503
+
+    @app.post("/api/wifi/recovery-password")
+    def wifi_recovery_password():
+        if not _env_flag("MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE"):
+            return jsonify({"ok": False, "message": "Setup Wi-Fi password changes are unavailable."}), 404
+        payload = _request_data()
+        password = str(payload.get("password", ""))
+        confirmation = str(payload.get("confirmation", ""))
+        if password != confirmation:
+            return jsonify({**wifi.status().to_dict(), "ok": False, "message": "Setup Wi-Fi passwords do not match."}), 400
+        try:
+            result = wifi.change_recovery_password(password)
+        except ValueError as exc:
+            return jsonify({**wifi.status().to_dict(), "ok": False, "message": str(exc)}), 400
         return jsonify(result.to_dict()), 200 if result.ok else 503
 
     return app

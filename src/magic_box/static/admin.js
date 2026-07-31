@@ -532,8 +532,17 @@ if (wifiPanel) {
   const connectButton = wifiPanel.querySelector("[data-wifi-connect-button]");
   const ssidInput = wifiPanel.querySelector("[data-wifi-ssid-input]");
   const passwordInput = wifiPanel.querySelector("[data-wifi-password-input]");
+  const recoveryPasswordForm = wifiPanel.querySelector("[data-recovery-password-form]");
+  const recoveryPasswordInput = wifiPanel.querySelector("[data-recovery-password]");
+  const recoveryPasswordConfirmation = wifiPanel.querySelector("[data-recovery-password-confirmation]");
+  const recoveryPasswordButton = wifiPanel.querySelector("[data-recovery-password-button]");
+  const recoveryPasswordStatus = wifiPanel.querySelector("[data-recovery-password-status]");
+  const reconnectControls = wifiPanel.querySelectorAll("[data-reconnect-controls]");
+  const connectStatus = wifiPanel.querySelector("[data-wifi-connect-status]");
   const statusLine = wifiPanel.querySelector("[data-wifi-status]");
   const reconnectSuccess = wifiPanel.querySelector("[data-reconnect-success]");
+  const reconnectHeading = wifiPanel.querySelector("[data-reconnect-heading]");
+  const reconnectTargets = wifiPanel.querySelectorAll("[data-reconnect-target]");
   const adapterValue = wifiPanel.querySelector("[data-wifi-adapter]");
   const messageValue = wifiPanel.querySelector("[data-wifi-message]");
   const ssidValue = wifiPanel.querySelector("[data-wifi-ssid]");
@@ -559,24 +568,113 @@ if (wifiPanel) {
     event.preventDefault();
     const ssid = ssidInput?.value?.trim() || "";
     const password = passwordInput?.value || "";
+    [ssidInput, passwordInput].forEach((input) => input?.setAttribute("aria-invalid", "false"));
+    reconnectTargets.forEach((target) => {
+      target.textContent = ssid || "your home Wi-Fi";
+    });
     const payload = await runWifiRequest("/api/wifi/connect", {
       label: `Connecting to ${ssid || "Wi-Fi"}...`,
       busyButton: connectButton,
       busyText: "Connecting...",
+      statusTarget: connectStatus,
+      disconnectExpected: true,
       fetchOptions: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ssid, password }),
       },
     });
-    if (payload?.ok && reconnectSuccess) {
+    if (payload?.ok === false) {
+      [ssidInput, passwordInput].forEach((input) => input?.setAttribute("aria-invalid", "true"));
+    }
+    if ((payload?.ok || payload === null) && reconnectSuccess) {
+      if (reconnectHeading) {
+        reconnectHeading.textContent = payload?.ok
+          ? `Story Dock is joining ${ssid}.`
+          : `Story Dock may be joining ${ssid}.`;
+      }
+      if (payload === null && connectStatus) {
+        connectStatus.textContent =
+          `This page lost contact with Story Dock. That often means it switched to ${ssid}. Rejoin ${ssid} on your phone.`;
+      }
       reconnectSuccess.hidden = false;
+      if (statusLine) {
+        statusLine.hidden = true;
+      }
+      reconnectControls.forEach((control) => {
+        control.hidden = true;
+      });
       if (networkList) {
         networkList.hidden = true;
       }
+      if (passwordInput) {
+        passwordInput.value = "";
+      }
     }
-    if (passwordInput) {
-      passwordInput.value = "";
+  });
+
+  recoveryPasswordForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const password = recoveryPasswordInput?.value || "";
+    const confirmation = recoveryPasswordConfirmation?.value || "";
+    if (recoveryPasswordConfirmation && password !== confirmation) {
+      recoveryPasswordInput?.setAttribute("aria-invalid", "true");
+      recoveryPasswordConfirmation.setAttribute("aria-invalid", "true");
+      recoveryPasswordConfirmation.setCustomValidity("The passwords do not match.");
+      recoveryPasswordConfirmation.reportValidity();
+      recoveryPasswordConfirmation.focus();
+      return;
     }
+    [recoveryPasswordInput, recoveryPasswordConfirmation].forEach((input) => input?.setAttribute("aria-invalid", "false"));
+    const payload = await runWifiRequest("/api/wifi/recovery-password", {
+      label: "Saving Setup Wi-Fi password...",
+      busyButton: recoveryPasswordButton,
+      busyText: "Saving...",
+      statusTarget: recoveryPasswordStatus,
+      fetchOptions: {
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password, confirmation }),
+      },
+    });
+    if (payload?.ok === false) {
+      [recoveryPasswordInput, recoveryPasswordConfirmation].forEach((input) => input?.setAttribute("aria-invalid", "true"));
+    }
+    if (payload?.ok) {
+      recoveryPasswordForm.reset();
+      if (recoveryPasswordStatus) {
+        recoveryPasswordStatus.textContent =
+          "Setup Wi-Fi password saved. Use it to join Story Dock Setup next time. Your home Wi-Fi password did not change.";
+      }
+    }
+  });
+
+  recoveryPasswordConfirmation?.addEventListener("input", () => {
+    recoveryPasswordConfirmation.setCustomValidity("");
+    [recoveryPasswordInput, recoveryPasswordConfirmation].forEach((input) => input?.setAttribute("aria-invalid", "false"));
+  });
+  recoveryPasswordInput?.addEventListener("input", () => {
+    recoveryPasswordConfirmation?.setCustomValidity("");
+    [recoveryPasswordInput, recoveryPasswordConfirmation].forEach((input) => input?.setAttribute("aria-invalid", "false"));
+  });
+  [ssidInput, passwordInput].forEach((input) => {
+    input?.addEventListener("input", () => {
+      [ssidInput, passwordInput].forEach((field) => field?.setAttribute("aria-invalid", "false"));
+    });
+  });
+
+  wifiPanel.querySelectorAll("[data-password-toggle]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const input = button.closest(".password-input-wrap")?.querySelector("input");
+      if (!input) {
+        return;
+      }
+      const shouldShow = input.type === "password";
+      input.type = shouldShow ? "text" : "password";
+      button.textContent = shouldShow ? "Hide" : "Show";
+      button.setAttribute(
+        "aria-label",
+        shouldShow ? button.dataset.passwordHideLabel || "Hide password" : button.dataset.passwordShowLabel || "Show password",
+      );
+    });
   });
 
   networkList?.addEventListener("click", (event) => {
@@ -616,9 +714,10 @@ if (wifiPanel) {
     const fetchOptions = options.fetchOptions || {};
     const button = options.busyButton || null;
     const originalText = button?.textContent || "";
+    const requestStatus = options.statusTarget || statusLine;
 
-    if (statusLine && options.label) {
-      statusLine.textContent = options.label;
+    if (requestStatus && options.label) {
+      requestStatus.textContent = options.label;
     }
     if (button) {
       button.disabled = true;
@@ -629,13 +728,15 @@ if (wifiPanel) {
       const response = await fetch(url, { method: "POST", ...fetchOptions });
       const payload = await response.json();
       updateWifiPanel(payload);
-      if (statusLine) {
-        statusLine.textContent = payload.message || (response.ok ? "Wi-Fi action complete." : "Wi-Fi action failed.");
+      if (requestStatus) {
+        requestStatus.textContent = payload.message || (response.ok ? "Wi-Fi action complete." : "Wi-Fi action failed.");
       }
       return payload;
     } catch (error) {
-      if (statusLine) {
-        statusLine.textContent = `Wi-Fi action failed: ${error}`;
+      if (requestStatus) {
+        requestStatus.textContent = options.disconnectExpected
+          ? "This page lost contact with Story Dock while it was switching networks."
+          : "Could not reach Story Dock. Please try again.";
       }
       return null;
     } finally {
@@ -696,13 +797,13 @@ if (wifiPanel) {
     const labels = network.active ? '<span>connected</span>' : "";
     const disabled = available ? "" : " disabled";
     return `
-      <article class="wifi-network" data-wifi-network-ssid="${escapeHtml(network.ssid || "")}">
+      <article class="wifi-network" data-wifi-network-ssid="${escapeHtml(network.ssid || "")}" role="listitem">
         <div>
           <h3>${escapeHtml(network.ssid || "Hidden network")}</h3>
           <p class="muted">${escapeHtml(signal)}% signal${security}</p>
           <p class="tag-list">${labels}</p>
         </div>
-        <button class="button button-secondary" type="button" data-wifi-use-network${disabled}>Choose</button>
+        <button class="button button-secondary" type="button" aria-label="Choose ${escapeHtml(network.ssid || "hidden network")}" data-wifi-use-network${disabled}>Choose</button>
       </article>
     `;
   }

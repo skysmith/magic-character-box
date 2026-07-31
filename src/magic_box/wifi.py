@@ -11,6 +11,8 @@ from typing import Callable
 
 
 LOGGER = logging.getLogger(__name__)
+MIN_RECOVERY_PASSWORD_LENGTH = 8
+MAX_RECOVERY_PASSWORD_LENGTH = 63
 
 
 @dataclass(frozen=True)
@@ -183,6 +185,27 @@ class WifiController:
         message = f"Connected to {clean_ssid}." if ok else _clean_error(completed) or f"Could not connect to {clean_ssid}."
         return WifiActionResult(ok=ok, message=message, status=self.status())
 
+    def change_recovery_password(self, password: str) -> WifiActionResult:
+        if self.nmcli is None and self.helper is None:
+            return self._missing_result()
+
+        if "\x00" in password or "\n" in password or "\r" in password:
+            raise ValueError("Setup Wi-Fi password contains unsupported characters.")
+        if not MIN_RECOVERY_PASSWORD_LENGTH <= len(password) <= MAX_RECOVERY_PASSWORD_LENGTH:
+            raise ValueError(
+                f"Setup Wi-Fi password must be {MIN_RECOVERY_PASSWORD_LENGTH}–"
+                f"{MAX_RECOVERY_PASSWORD_LENGTH} characters."
+            )
+
+        completed = self._run("story-dock", "recovery-password", password, timeout=12)
+        ok = completed.returncode == 0
+        message = (
+            "Setup Wi-Fi password updated for the next setup session."
+            if ok
+            else _clean_error(completed) or "Could not update the Setup Wi-Fi password."
+        )
+        return WifiActionResult(ok=ok, message=message, status=self.status())
+
     def _missing_result(self) -> WifiActionResult:
         status = self.status()
         return WifiActionResult(ok=False, message=status.message, status=status)
@@ -250,6 +273,8 @@ def _helper_args(args: tuple[str, ...]) -> list[str] | None:
         return ["connect", args[3]]
     if len(args) == 6 and args[:3] == ("device", "wifi", "connect") and args[4] == "password":
         return ["connect", args[3], args[5]]
+    if len(args) == 3 and args[:2] == ("story-dock", "recovery-password"):
+        return ["set-recovery-password", args[2]]
     return None
 
 
