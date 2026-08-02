@@ -53,13 +53,12 @@ When the box is broadcasting its setup/recovery Wi-Fi network, open:
 http://10.42.0.1:8080/
 ```
 
-That address lands on a single-purpose reconnect page instead of the full dashboard. The page should only ask for the home Wi-Fi network and password, then hand the box back to the normal network. If the browser loses the page after clicking `Reconnect Story Dock`, that usually means the box left setup mode and is joining Wi-Fi.
+That address lands on a single-purpose reconnect page instead of the full dashboard. The page should only ask for the home Wi-Fi network and password, then hand the box back to the normal network. After the join begins, the confirmation provides a prominent **Open My Story Dock** action and waits for internet access before automatically opening the configured owner portal. If the captive browser closes first, rejoin the selected home network and open the owner app normally.
 
-The full local dashboard is still available for support and advanced setup at:
-
-```text
-http://10.42.0.1:8080/admin
-```
+The full local dashboard stays closed on the recovery network. Integrators may
+enable the explicit recovery-support profile for supervised bench work, but a
+customer recovery session exposes only the reconnect page and its narrowly
+scoped Wi-Fi actions.
 
 ## What It Does
 

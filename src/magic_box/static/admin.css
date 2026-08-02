@@ -236,6 +236,21 @@ main {
   color: var(--text-secondary);
 }
 
+.reconnect-owner-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.reconnect-owner-button {
+  justify-content: center;
+  text-align: center;
+}
+
+.reconnect-owner-status {
+  margin: 0;
+}
+
 .reconnect-network-list {
   margin-top: 0;
 }

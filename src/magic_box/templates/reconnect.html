@@ -111,8 +111,16 @@
 
         <div class="reconnect-success" data-reconnect-success hidden>
           <strong data-reconnect-heading>Story Dock is connecting.</strong>
-          <span>This page may close. On your phone, rejoin <strong data-reconnect-target>your home Wi-Fi</strong>, then open Library.</span>
-          <a class="text-link" href="{{ owner_url }}">Return to My Story Dock</a>
+          <span>
+            Your phone may briefly disconnect while Story Dock joins
+            <strong data-reconnect-target>your home Wi-Fi</strong>.
+          </span>
+          <div class="reconnect-owner-actions">
+            <a class="button reconnect-owner-button" href="{{ owner_url }}" data-reconnect-owner>Open My Story Dock</a>
+            <p class="muted reconnect-owner-status" data-reconnect-owner-status role="status" aria-live="polite">
+              We’ll open My Story Dock automatically when your phone is back online.
+            </p>
+          </div>
         </div>
 
         {% if recovery_password_editable %}

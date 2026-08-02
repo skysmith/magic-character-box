@@ -112,13 +112,26 @@ class AdminTests(unittest.TestCase):
             self.assertNotIn(b">Refresh</button>", response.data)
             self.assertIn(b"Show home Wi-Fi password", response.data)
             self.assertIn(b"Your memories stay saved.", response.data)
-            self.assertIn(b"Return to My Story Dock", response.data)
+            self.assertIn(b"Open My Story Dock", response.data)
+            self.assertIn(b"data-reconnect-owner", response.data)
+            self.assertIn(b"data-reconnect-owner-status", response.data)
+            self.assertIn(b"https://tap.getstorydock.com/owner?tab=dock", response.data)
             self.assertIn(b'aria-describedby="wifi-connect-status"', response.data)
             self.assertNotIn(b"favicon.svg", response.data)
             self.assertNotIn(b"I've got you", response.data)
             self.assertNotIn(b"Photo stories", response.data)
             self.assertNotIn(b"Teach character", response.data)
             self.assertNotIn(b"Bluetooth experiments", response.data)
+
+    def test_reconnect_script_waits_for_internet_before_opening_owner_portal(self) -> None:
+        script = (
+            Path(__file__).parents[1] / "src" / "magic_box" / "static" / "admin.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("beginOwnerReturn();", script)
+        self.assertIn('mode: "no-cors"', script)
+        self.assertIn("window.location.assign(ownerUrl);", script)
+        self.assertIn("When your phone is back online, tap Open My Story Dock.", script)
 
     def test_reconnect_page_is_not_exposed_on_the_normal_admin_host(self) -> None:
         with _temp_project() as root:

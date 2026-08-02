@@ -544,6 +544,8 @@ if (wifiPanel) {
   const reconnectSuccess = wifiPanel.querySelector("[data-reconnect-success]");
   const reconnectHeading = wifiPanel.querySelector("[data-reconnect-heading]");
   const reconnectTargets = wifiPanel.querySelectorAll("[data-reconnect-target]");
+  const reconnectOwnerLink = wifiPanel.querySelector("[data-reconnect-owner]");
+  const reconnectOwnerStatus = wifiPanel.querySelector("[data-reconnect-owner-status]");
   const adapterValue = wifiPanel.querySelector("[data-wifi-adapter]");
   const messageValue = wifiPanel.querySelector("[data-wifi-message]");
   const ssidValue = wifiPanel.querySelector("[data-wifi-ssid]");
@@ -552,6 +554,7 @@ if (wifiPanel) {
   const networkList = wifiPanel.querySelector("[data-wifi-networks]");
   const optionList = wifiPanel.querySelector("[data-wifi-options]");
   let wifiAvailable = false;
+  let ownerReturnStarted = false;
 
   refreshButton?.addEventListener("click", () => {
     refreshWifiStatus("Refreshing Wi-Fi...");
@@ -613,8 +616,39 @@ if (wifiPanel) {
       if (passwordInput) {
         passwordInput.value = "";
       }
+      beginOwnerReturn();
     }
   });
+
+  function beginOwnerReturn() {
+    const ownerUrl = reconnectOwnerLink?.href || "";
+    if (!ownerUrl || ownerReturnStarted) {
+      return;
+    }
+    ownerReturnStarted = true;
+    const deadline = Date.now() + 90000;
+
+    const openWhenOnline = async () => {
+      try {
+        await fetch(ownerUrl, { cache: "no-store", mode: "no-cors" });
+        if (reconnectOwnerStatus) {
+          reconnectOwnerStatus.textContent = "Opening My Story Dock…";
+        }
+        window.location.assign(ownerUrl);
+      } catch (_error) {
+        if (Date.now() < deadline) {
+          window.setTimeout(openWhenOnline, 2500);
+          return;
+        }
+        if (reconnectOwnerStatus) {
+          reconnectOwnerStatus.textContent =
+            "When your phone is back online, tap Open My Story Dock.";
+        }
+      }
+    };
+
+    window.setTimeout(openWhenOnline, 4000);
+  }
 
   recoveryPasswordForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
