@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import os
 import shutil
@@ -177,18 +178,26 @@ class WifiController:
         if "\x00" in password or "\n" in password or "\r" in password:
             raise ValueError("Wi-Fi password contains unsupported characters.")
 
-        args = ["device", "wifi", "connect", clean_ssid]
-        if password:
-            args.extend(["password", password])
-        completed = self._run(*args, timeout=30)
+        if self.helper is not None:
+            completed = self._run_helper_secret(
+                "connect-stdin",
+                {"ssid": clean_ssid, "password": password},
+                timeout=30,
+            )
+        else:
+            args = ["device", "wifi", "connect", clean_ssid]
+            if password:
+                args.insert(0, "--ask")
+            completed = self._run(
+                *args,
+                timeout=30,
+                input_text=f"{password}\n" if password else None,
+            )
         ok = completed.returncode == 0
         message = f"Connected to {clean_ssid}." if ok else _clean_error(completed) or f"Could not connect to {clean_ssid}."
         return WifiActionResult(ok=ok, message=message, status=self.status())
 
     def change_recovery_password(self, password: str) -> WifiActionResult:
-        if self.nmcli is None and self.helper is None:
-            return self._missing_result()
-
         if "\x00" in password or "\n" in password or "\r" in password:
             raise ValueError("Setup Wi-Fi password contains unsupported characters.")
         if not MIN_RECOVERY_PASSWORD_LENGTH <= len(password) <= MAX_RECOVERY_PASSWORD_LENGTH:
@@ -196,8 +205,14 @@ class WifiController:
                 f"Setup Wi-Fi password must be {MIN_RECOVERY_PASSWORD_LENGTH}–"
                 f"{MAX_RECOVERY_PASSWORD_LENGTH} characters."
             )
+        if self.helper is None:
+            return self._missing_result()
 
-        completed = self._run("story-dock", "recovery-password", password, timeout=12)
+        completed = self._run_helper_secret(
+            "set-recovery-password-stdin",
+            {"password": password},
+            timeout=12,
+        )
         ok = completed.returncode == 0
         message = (
             "Setup Wi-Fi password updated for the next setup session."
@@ -210,8 +225,40 @@ class WifiController:
         status = self.status()
         return WifiActionResult(ok=False, message=status.message, status=status)
 
-    def _run(self, *args: str, timeout: float) -> subprocess.CompletedProcess[str]:
+    def _run(
+        self,
+        *args: str,
+        timeout: float,
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         command = self._command_for_args(args)
+        return self._execute(command, timeout=timeout, input_text=input_text)
+
+    def _run_helper_secret(
+        self,
+        operation: str,
+        payload: dict[str, str],
+        *,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if self.helper is None:
+            raise RuntimeError("Privileged Wi-Fi helper is not installed.")
+        command = [self.helper, operation]
+        if os.geteuid() != 0 and self.sudo:
+            command = [self.sudo, "-n", *command]
+        return self._execute(
+            command,
+            timeout=timeout,
+            input_text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    def _execute(
+        self,
+        command: list[str],
+        *,
+        timeout: float,
+        input_text: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         try:
             return self._runner(
                 command,
@@ -219,6 +266,7 @@ class WifiController:
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                input=input_text,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             LOGGER.warning("nmcli command failed: %s", exc)
@@ -269,12 +317,6 @@ def _helper_args(args: tuple[str, ...]) -> list[str] | None:
         return ["device-status"]
     if args == ("-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list"):
         return ["list"]
-    if len(args) == 4 and args[:3] == ("device", "wifi", "connect"):
-        return ["connect", args[3]]
-    if len(args) == 6 and args[:3] == ("device", "wifi", "connect") and args[4] == "password":
-        return ["connect", args[3], args[5]]
-    if len(args) == 3 and args[:2] == ("story-dock", "recovery-password"):
-        return ["set-recovery-password", args[2]]
     return None
 
 

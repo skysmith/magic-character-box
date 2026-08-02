@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -13,7 +14,7 @@ import tempfile
 
 
 RECOVERY_ENV = Path(os.getenv("STORY_DOCK_SETUP_HOTSPOT_ENV", "/etc/story-dock/setup-hotspot.env"))
-RECOVERY_CONNECTION = os.getenv("STORY_DOCK_SETUP_HOTSPOT_CONNECTION", "story-dock-setup-hotspot")
+MAX_SECRET_PAYLOAD_BYTES = 4096
 
 
 def main() -> int:
@@ -24,11 +25,8 @@ def main() -> int:
     subparsers.add_parser("device-status")
     subparsers.add_parser("rescan")
     subparsers.add_parser("list")
-    connect = subparsers.add_parser("connect")
-    connect.add_argument("ssid")
-    connect.add_argument("password", nargs="?", default="")
-    recovery_password = subparsers.add_parser("set-recovery-password")
-    recovery_password.add_argument("password")
+    subparsers.add_parser("connect-stdin")
+    subparsers.add_parser("set-recovery-password-stdin")
 
     args = parser.parse_args()
     nmcli = shutil.which("nmcli") or "/usr/bin/nmcli"
@@ -46,16 +44,20 @@ def main() -> int:
         return run(nmcli, "device", "wifi", "rescan")
     if args.command == "list":
         return run(nmcli, "-t", "--escape", "yes", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list")
-    if args.command == "connect":
-        ssid = validate_value(args.ssid, "Wi-Fi network name")
-        password = validate_value(args.password, "Wi-Fi password")
+    if args.command == "connect-stdin":
+        payload = read_secret_payload()
+        ssid = validate_payload_value(payload, "ssid", "Wi-Fi network name")
+        password = validate_payload_value(payload, "password", "Wi-Fi password")
         command = [nmcli, "device", "wifi", "connect", ssid]
         if password:
-            command.extend(["password", password])
-        return run_command(command)
-    if args.command == "set-recovery-password":
-        password = validate_recovery_password(args.password)
-        return set_recovery_password(nmcli, password)
+            command.insert(1, "--ask")
+        return run_command(command, input_text=f"{password}\n" if password else None)
+    if args.command == "set-recovery-password-stdin":
+        payload = read_secret_payload()
+        password = validate_recovery_password(
+            validate_payload_value(payload, "password", "Recovery Wi-Fi password")
+        )
+        return set_recovery_password(password)
 
     return 2
 
@@ -66,6 +68,26 @@ def validate_value(value: str, label: str) -> str:
     return value
 
 
+def read_secret_payload() -> dict[str, object]:
+    raw = sys.stdin.read(MAX_SECRET_PAYLOAD_BYTES + 1)
+    if len(raw.encode("utf-8")) > MAX_SECRET_PAYLOAD_BYTES:
+        raise SystemExit("Wi-Fi request is too large.")
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeError) as exc:
+        raise SystemExit("Wi-Fi request is invalid.") from exc
+    if not isinstance(payload, dict):
+        raise SystemExit("Wi-Fi request is invalid.")
+    return payload
+
+
+def validate_payload_value(payload: dict[str, object], key: str, label: str) -> str:
+    value = payload.get(key, "")
+    if not isinstance(value, str):
+        raise SystemExit(f"{label} is invalid.")
+    return validate_value(value, label)
+
+
 def validate_recovery_password(value: str) -> str:
     password = validate_value(value, "Recovery Wi-Fi password")
     if not 8 <= len(password) <= 63:
@@ -73,7 +95,7 @@ def validate_recovery_password(value: str) -> str:
     return password
 
 
-def set_recovery_password(nmcli: str, password: str) -> int:
+def set_recovery_password(password: str) -> int:
     if not RECOVERY_ENV.is_file():
         print("Story Dock recovery Wi-Fi is not configured.", file=sys.stderr)
         return 2
@@ -105,21 +127,9 @@ def set_recovery_password(nmcli: str, password: str) -> int:
         if os.path.exists(temporary_name):
             os.unlink(temporary_name)
 
-    connection = subprocess.run(
-        [nmcli, "-t", "-f", "NAME", "connection", "show"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if connection.returncode != 0:
-        return connection.returncode
-    if RECOVERY_CONNECTION in connection.stdout.splitlines():
-        changed = subprocess.run(
-            [nmcli, "connection", "modify", RECOVERY_CONNECTION, "wifi-sec.psk", password],
-            check=False,
-        )
-        if changed.returncode != 0:
-            return changed.returncode
+    # The recovery hotspot rebuilds its NetworkManager profile from this file
+    # whenever the next setup session starts. Do not put this future-session
+    # credential in a child process argument merely to alter the active session.
     return 0
 
 
@@ -131,8 +141,8 @@ def run(nmcli: str, *args: str) -> int:
     return run_command([nmcli, *args])
 
 
-def run_command(command: list[str]) -> int:
-    completed = subprocess.run(command, check=False)
+def run_command(command: list[str], *, input_text: str | None = None) -> int:
+    completed = subprocess.run(command, check=False, input=input_text, text=True)
     return completed.returncode
 
 

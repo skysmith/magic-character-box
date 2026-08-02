@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 
@@ -41,12 +42,9 @@ class WifiControllerTests(unittest.TestCase):
     def test_connect_uses_helper_without_leaking_password_in_result(self) -> None:
         runner = _FakeRunner(
             {
-                (
-                    "/usr/local/bin/magic-character-box-wifi-control",
-                    "connect",
-                    "Mini Cottage",
-                    "private pass",
-                ): subprocess.CompletedProcess([], 0, "connected\n", ""),
+                ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"): subprocess.CompletedProcess(
+                    [], 0, "connected\n", ""
+                ),
                 ("/usr/local/bin/magic-character-box-wifi-control", "radio-status"): subprocess.CompletedProcess(
                     [], 0, "enabled\n", ""
                 ),
@@ -69,7 +67,12 @@ class WifiControllerTests(unittest.TestCase):
         self.assertNotIn("private pass", result.to_dict()["message"])
         self.assertEqual(
             runner.commands[0],
-            ("/usr/local/bin/magic-character-box-wifi-control", "connect", "Mini Cottage", "private pass"),
+            ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"),
+        )
+        self.assertNotIn("private pass", " ".join(runner.commands[0]))
+        self.assertEqual(
+            json.loads(runner.inputs[0] or ""),
+            {"ssid": "Mini Cottage", "password": "private pass"},
         )
 
     def test_change_recovery_password_uses_helper_without_leaking_password(self) -> None:
@@ -77,8 +80,7 @@ class WifiControllerTests(unittest.TestCase):
             {
                 (
                     "/usr/local/bin/magic-character-box-wifi-control",
-                    "set-recovery-password",
-                    "new private pass",
+                    "set-recovery-password-stdin",
                 ): subprocess.CompletedProcess([], 0, "", ""),
                 ("/usr/local/bin/magic-character-box-wifi-control", "radio-status"): subprocess.CompletedProcess(
                     [], 0, "enabled\n", ""
@@ -103,10 +105,11 @@ class WifiControllerTests(unittest.TestCase):
             runner.commands[0],
             (
                 "/usr/local/bin/magic-character-box-wifi-control",
-                "set-recovery-password",
-                "new private pass",
+                "set-recovery-password-stdin",
             ),
         )
+        self.assertNotIn("new private pass", " ".join(runner.commands[0]))
+        self.assertEqual(json.loads(runner.inputs[0] or ""), {"password": "new private pass"})
 
     def test_change_recovery_password_rejects_invalid_length(self) -> None:
         controller = WifiController(nmcli="/usr/bin/nmcli", helper=None, sudo="")
@@ -119,10 +122,13 @@ class _FakeRunner:
     def __init__(self, results: dict[tuple[str, ...], subprocess.CompletedProcess[str]]) -> None:
         self.results = results
         self.commands: list[tuple[str, ...]] = []
+        self.inputs: list[str | None] = []
 
-    def __call__(self, command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+    def __call__(self, command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         key = tuple(command)
         self.commands.append(key)
+        value = kwargs.get("input")
+        self.inputs.append(value if isinstance(value, str) else None)
         return self.results.get(key, subprocess.CompletedProcess(command, 1, "", f"unexpected command: {key}"))
 
 

@@ -316,6 +316,13 @@ full admin page on a trusted local network or trusted Tailscale HTTPS, because
 it still has maintenance controls such as shutdown, backups, scanning, and
 network changes.
 
+When the privileged helper is installed, both home-network connects and Setup
+Wi-Fi password changes use bounded JSON on standard input. Passwords never
+appear in the helper or `sudo` command arguments. NetworkManager receives a
+home-network password through its standard-input prompt, and a changed Setup
+Wi-Fi password is applied from the root-only recovery file when the next setup
+session starts.
+
 When an integrator supplies the privileged recovery helper and explicitly sets
 `MAGIC_BOX_RECOVERY_PASSWORD_EDITABLE=1`, the reconnect page and full local
 dashboard also offer **Change Story Dock Setup Wi-Fi password**. The form
