@@ -595,13 +595,11 @@ if (wifiPanel) {
     }
     if ((payload?.ok || payload === null) && reconnectSuccess) {
       if (reconnectHeading) {
-        reconnectHeading.textContent = payload?.ok
-          ? `Story Dock is joining ${ssid}.`
-          : `Story Dock may be joining ${ssid}.`;
+        reconnectHeading.textContent = `Story Dock is connecting to ${ssid}.`;
       }
       if (payload === null && connectStatus) {
         connectStatus.textContent =
-          `This page lost contact with Story Dock. That often means it switched to ${ssid}. Rejoin ${ssid} on your phone.`;
+          `The connection request was sent. If your phone disconnected, rejoin ${ssid}; My Story Dock will open when you are back online.`;
       }
       reconnectSuccess.hidden = false;
       if (statusLine) {

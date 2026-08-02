@@ -129,6 +129,8 @@ class AdminTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("beginOwnerReturn();", script)
+        self.assertIn("Story Dock is connecting to ${ssid}.", script)
+        self.assertNotIn("may be joining", script)
         self.assertIn('mode: "no-cors"', script)
         self.assertIn("window.location.assign(ownerUrl);", script)
         self.assertIn("When your phone is back online, tap Open My Story Dock.", script)
