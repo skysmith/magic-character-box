@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from magic_box.app import (
     _TagPlaybackState,
+    _configure_gpio_working_directory,
     _handle_service_stop,
     build_parser,
     main,
@@ -22,6 +23,38 @@ from magic_box.player_load import PlayerLoadError
 
 
 class AppSystemSoundTests(unittest.TestCase):
+    def test_gpio_runtime_pipe_uses_persistent_config_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LG_WD", None)
+            config_path = Path(temp_dir) / "config" / "characters.json"
+            config_path.parent.mkdir()
+
+            _configure_gpio_working_directory(config_path, nfc_backend="pn532", amp_gpio=None)
+
+            self.assertEqual(os.environ["LG_WD"], str(config_path.parent.resolve()))
+
+    def test_gpio_runtime_pipe_preserves_explicit_override(self) -> None:
+        with patch.dict(os.environ, {"LG_WD": "/run/magic-box"}, clear=False):
+            _configure_gpio_working_directory(
+                Path("config/characters.json"),
+                nfc_backend="pn532",
+                amp_gpio=None,
+            )
+
+            self.assertEqual(os.environ["LG_WD"], "/run/magic-box")
+
+    def test_non_gpio_mode_does_not_set_gpio_runtime_directory(self) -> None:
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LG_WD", None)
+
+            _configure_gpio_working_directory(
+                Path("config/characters.json"),
+                nfc_backend="mock",
+                amp_gpio=None,
+            )
+
+            self.assertNotIn("LG_WD", os.environ)
+
     def test_hosted_ndef_reader_mode_is_explicitly_available(self) -> None:
         self.assertEqual(build_parser().parse_args(["--nfc", "pn532-ndef"]).nfc, "pn532-ndef")
 

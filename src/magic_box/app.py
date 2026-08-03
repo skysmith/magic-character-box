@@ -31,6 +31,7 @@ from .volume import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_STARTUP_SOUND = "audio/system/startup-chime.mp3"
 DEFAULT_UNKNOWN_SOUND = "audio/system/unknown-tag.mp3"
+GPIO_NFC_BACKENDS = frozenset({"pn532", "pn532-spi", "spi", "pn532-ndef"})
 
 
 class _ServiceStopRequested(Exception):
@@ -73,6 +74,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_gpio_working_directory(
+    config_path: Path,
+    *,
+    nfc_backend: str,
+    amp_gpio: int | None,
+) -> None:
+    """Keep lgpio notification FIFOs beside persistent runtime config."""
+
+    if nfc_backend not in GPIO_NFC_BACKENDS and amp_gpio is None:
+        return
+    os.environ.setdefault("LG_WD", str(config_path.expanduser().resolve().parent))
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -235,6 +249,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         LOGGER.error("%s", exc)
         return 2
+    _configure_gpio_working_directory(
+        config.path,
+        nfc_backend=args.nfc,
+        amp_gpio=args.amp_sd_gpio,
+    )
     config_mtime = _config_mtime(config.path)
     player_load_bridge: PlayerLoadBridge | None = None
     if args.transactional_config:
