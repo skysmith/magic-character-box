@@ -66,7 +66,7 @@ The recommended build uses three layers of protection:
 
 - MAX98357A `SD` wired to `GPIO16 / physical pin 36`.
 - One continuous `aplay` sink on `plughw:CARD=MAX98357A,DEV=0`, fixed at 48 kHz stereo S16.
-- `MAGIC_BOX_MAX_OUTPUT_VOLUME=75` to keep dashboard full-volume below raw `mpg123` full scale.
+- Lower `MAGIC_BOX_MAX_OUTPUT_VOLUME` below its default `100` only when a known speaker, power, or wiring path needs a hardware-specific safety ceiling.
 
 Uploaded and recorded files are also prepared with short fades and loudness normalization when `ffmpeg` is installed.
 

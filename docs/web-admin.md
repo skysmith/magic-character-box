@@ -300,7 +300,7 @@ That file is runtime state, not a hand-edited config. It is useful for troublesh
 
 The MAX98357A I2S amp usually does not expose a hardware mixer to `amixer`. On the founder Pi setup, the `+` and `-` buttons save a shared volume percentage in `config/volume.json` and apply it to `mpg123` software volume on the direct ALSA `plughw` speaker path.
 
-The service files also set `MAGIC_BOX_MAX_OUTPUT_VOLUME=75` as a small-speaker safety ceiling. With that ceiling, dashboard volume still shows 0-100%, but 100% maps to 75% of `mpg123` full-scale output so the MAX98357A and small passive speaker are less likely to crackle from overdrive. If a larger speaker needs more headroom, raise that environment value and restart the services.
+The service files set `MAGIC_BOX_DEFAULT_VOLUME=80` and `MAGIC_BOX_MAX_OUTPUT_VOLUME=100`, so the default is easy to hear and 100% is true full-scale output. If a particular MAX98357A, speaker, power supply, or wiring path crackles at Loud, lower `MAGIC_BOX_MAX_OUTPUT_VOLUME` and restart the services rather than masking a hardware fault in the customer-facing scale.
 
 If you intentionally override playback to Pulse/PipeWire for Bluetooth experiments, the app uses `wpctl` when available and falls back to per-player software volume otherwise.
 
@@ -384,7 +384,7 @@ If clip starts still pop, verify the founder audio path before changing hardware
 
 ```bash
 MAGIC_BOX_AUDIO_BACKEND=continuous-pcm \
-MAGIC_BOX_MAX_OUTPUT_VOLUME=75 \
+MAGIC_BOX_MAX_OUTPUT_VOLUME=100 \
 MAGIC_BOX_AMP_MUTE_BETWEEN_TRACKS=0 \
 MAGIC_BOX_AUDIO_CMD="mpg123 -q -s --rate 48000 --stereo -e s16" \
 MAGIC_BOX_AUDIO_SINK_CMD="aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000" \

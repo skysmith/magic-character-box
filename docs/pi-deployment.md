@@ -67,8 +67,8 @@ The included service files default to the built-in MAX98357A ALSA output through
 
 ```text
 MAGIC_BOX_AUDIO_BACKEND=continuous-pcm
-MAGIC_BOX_DEFAULT_VOLUME=50
-MAGIC_BOX_MAX_OUTPUT_VOLUME=75
+MAGIC_BOX_DEFAULT_VOLUME=80
+MAGIC_BOX_MAX_OUTPUT_VOLUME=100
 MAGIC_BOX_AUDIO_CMD=mpg123 -q -s --rate 48000 --stereo -e s16
 MAGIC_BOX_AUDIO_SINK_CMD=aplay -q -D plughw:CARD=MAX98357A,DEV=0 --file-type raw --format S16_LE --rate 48000 --channels 2 --buffer-time=100000 --period-time=20000
 ```

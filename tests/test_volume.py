@@ -213,7 +213,7 @@ class VolumeTests(unittest.TestCase):
             report = apply_story_dock_volume_settings(path, {"managed": False})
 
             self.assertEqual(report["volume_apply_status"], "unmanaged")
-            self.assertEqual(report["volume_applied_percent"], 50)
+            self.assertEqual(report["volume_applied_percent"], 80)
             self.assertEqual(report["volume_applied_revision"], 0)
             self.assertEqual(report["volume_attempted_revision"], 0)
             self.assertFalse(path.exists())
