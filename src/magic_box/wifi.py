@@ -184,15 +184,11 @@ class WifiController:
                 {"ssid": clean_ssid, "password": password},
                 timeout=30,
             )
+            if self.nmcli is not None and _missing_helper_json_import(completed):
+                LOGGER.warning("Privileged Wi-Fi helper is missing its JSON import; retrying with NetworkManager.")
+                completed = self._run_nmcli_connect(clean_ssid, password)
         else:
-            args = ["device", "wifi", "connect", clean_ssid]
-            if password:
-                args.insert(0, "--ask")
-            completed = self._run(
-                *args,
-                timeout=30,
-                input_text=f"{password}\n" if password else None,
-            )
+            completed = self._run_nmcli_connect(clean_ssid, password)
         ok = completed.returncode == 0
         message = f"Connected to {clean_ssid}." if ok else _clean_error(completed) or f"Could not connect to {clean_ssid}."
         return WifiActionResult(ok=ok, message=message, status=self.status())
@@ -250,6 +246,16 @@ class WifiController:
             command,
             timeout=timeout,
             input_text=json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+        )
+
+    def _run_nmcli_connect(self, ssid: str, password: str) -> subprocess.CompletedProcess[str]:
+        args = ["device", "wifi", "connect", ssid]
+        if password:
+            args.insert(0, "--ask")
+        return self._execute(
+            [self.nmcli, *args] if self.nmcli is not None else [],
+            timeout=30,
+            input_text=f"{password}\n" if password else None,
         )
 
     def _execute(
@@ -351,3 +357,8 @@ def _parse_int(value: str) -> int | None:
 def _clean_error(completed: subprocess.CompletedProcess[str]) -> str:
     output = (completed.stderr or completed.stdout or "").strip()
     return output.splitlines()[-1] if output else ""
+
+
+def _missing_helper_json_import(completed: subprocess.CompletedProcess[str]) -> bool:
+    output = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    return completed.returncode != 0 and "NameError: name 'json' is not defined" in output

@@ -75,6 +75,42 @@ class WifiControllerTests(unittest.TestCase):
             {"ssid": "Mini Cottage", "password": "private pass"},
         )
 
+    def test_connect_recovers_from_r24_helper_missing_json_import(self) -> None:
+        runner = _FakeRunner(
+            {
+                ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"): subprocess.CompletedProcess(
+                    [], 1, "", "NameError: name 'json' is not defined\n"
+                ),
+                ("/usr/bin/nmcli", "--ask", "device", "wifi", "connect", "Mini Cottage"):
+                    subprocess.CompletedProcess([], 0, "connected\n", ""),
+                ("/usr/local/bin/magic-character-box-wifi-control", "radio-status"): subprocess.CompletedProcess(
+                    [], 0, "enabled\n", ""
+                ),
+                ("/usr/local/bin/magic-character-box-wifi-control", "device-status"): subprocess.CompletedProcess(
+                    [], 0, "wlan0:wifi:connected:Mini Cottage\n", ""
+                ),
+            }
+        )
+        controller = WifiController(
+            nmcli="/usr/bin/nmcli",
+            helper="/usr/local/bin/magic-character-box-wifi-control",
+            sudo="",
+            runner=runner,
+        )
+
+        result = controller.connect("Mini Cottage", "private pass")
+
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            runner.commands[:2],
+            [
+                ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"),
+                ("/usr/bin/nmcli", "--ask", "device", "wifi", "connect", "Mini Cottage"),
+            ],
+        )
+        self.assertNotIn("private pass", " ".join(runner.commands[1]))
+        self.assertEqual(runner.inputs[1], "private pass\n")
+
     def test_change_recovery_password_uses_helper_without_leaking_password(self) -> None:
         runner = _FakeRunner(
             {
