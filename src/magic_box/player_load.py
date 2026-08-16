@@ -11,21 +11,21 @@ mtime-based config reload behavior.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
 import tempfile
-from typing import Any, Iterable
 import uuid
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 from .audio import PLAYABLE_EXTENSIONS
 from .config import CharacterConfig, ConfigError, normalize_uid
-
 
 REQUEST_SCHEMA = "story-dock-player-load-request-v2"
 ACK_SCHEMA = "story-dock-player-load-ack-v2"
@@ -38,7 +38,9 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_CONFIG_BYTES = 2 * 1024 * 1024
 MAX_GENERATION_METADATA_BYTES = 8 * 1024 * 1024
 MAX_STATE_BYTES = 16 * 1024 * 1024
-MAX_ACTIVATION_HISTORY = 100_000
+MAX_PERSISTED_STATE_BYTES = 256 * 1024
+MAX_ACTIVATION_HISTORY = 4_096
+RETIRED_ACTIVATION_FINGERPRINT = "retired"
 MAX_BINDINGS = 8_192
 MAX_GENERATION_FILES = 65_536
 MAX_PLAYABLE_FILES = 65_536
@@ -174,6 +176,8 @@ class PlayerLoadBridge:
         self._rejected_ack: dict[str, Any] | None = None
         self._state_existed = self.state_path.exists()
         self._state = self._read_state()
+        if self._compact_activation_history():
+            self._write_state()
         self._initialize_active_config()
 
     def poll(self) -> bool:
@@ -576,7 +580,8 @@ class PlayerLoadBridge:
                 raise PlayerLoadError("Player-load state history was invalid")
             for activation_id, fingerprint in history.items():
                 _require_uuid(activation_id)
-                _require_sha256(fingerprint, label="Activation fingerprint")
+                if fingerprint != RETIRED_ACTIVATION_FINGERPRINT:
+                    _require_sha256(fingerprint, label="Activation fingerprint")
             active_id = payload.get("active_activation_id")
             active_fingerprint = payload.get("active_fingerprint")
             if active_id is not None:
@@ -621,7 +626,37 @@ class PlayerLoadBridge:
             raise PlayerLoadError("Player-load state could not be read safely")
 
     def _write_state(self) -> None:
+        self._compact_activation_history()
+        if len(_canonical_json_bytes(self._state)) > MAX_PERSISTED_STATE_BYTES:
+            raise PlayerLoadError("Player-load state exceeded its durable size bound")
         _atomic_write_json(self.state_path, self._state)
+
+    def _compact_activation_history(self) -> bool:
+        """Keep exact live proofs while tombstoning completed activation ids.
+
+        Completed ids remain permanently recognizable, so replay and id reuse
+        still fail closed. Their obsolete 64-byte fingerprints are not needed
+        once an activation is no longer active, pending, or rejected.
+        """
+        history = self._state["history"]
+        live_ids = {
+            value
+            for value in (
+                self._state.get("active_activation_id"),
+                self._state.get("pending_activation_id"),
+                self._state.get("rejected_activation_id"),
+            )
+            if isinstance(value, str)
+        }
+        changed = False
+        for activation_id, fingerprint in history.items():
+            if (
+                activation_id not in live_ids
+                and fingerprint != RETIRED_ACTIVATION_FINGERPRINT
+            ):
+                history[activation_id] = RETIRED_ACTIVATION_FINGERPRINT
+                changed = True
+        return changed
 
 
 def build_selected_inventory(
@@ -992,7 +1027,7 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         details = path.lstat()
         if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
             raise PlayerLoadError("Bridge output path was unsafe")
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8") + b"\n"
+    raw = _canonical_json_bytes(value)
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=parent)
     temp_path = Path(temp_name)
     try:
@@ -1017,6 +1052,13 @@ def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        + b"\n"
+    )
 
 
 def _ack_matches(path: Path, expected: dict[str, Any]) -> bool:
