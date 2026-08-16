@@ -3,24 +3,26 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
 import uuid
+from pathlib import Path
+from unittest.mock import patch
 
 from magic_box.config import CharacterConfig, ConfigError
 from magic_box.player_load import (
-    ACK_PROOF_FIELDS,
     ACK_FILENAME,
+    ACK_PROOF_FIELDS,
     ACK_SCHEMA,
+    MAX_PERSISTED_STATE_BYTES,
     MAX_REQUEST_BYTES,
+    REJECTION_REASON_CODES,
+    REQUEST_FIELDS,
+    REQUEST_FILENAME,
+    REQUEST_SCHEMA,
+    RETIRED_ACTIVATION_FINGERPRINT,
     PlayerLoadBridge,
     PlayerLoadError,
-    REQUEST_FILENAME,
-    REQUEST_FIELDS,
-    REQUEST_SCHEMA,
-    REJECTION_REASON_CODES,
     build_selected_inventory,
     canonical_config_sha256,
 )
@@ -154,6 +156,31 @@ class PlayerLoadBridgeTests(unittest.TestCase):
         self.assertFalse(bridge.poll())
         self.assertEqual(bridge.config.lookup("04-C3").name, "Second")
         self.assertEqual(self.ack_path.read_bytes(), second_ack)
+        state = json.loads(bridge.state_path.read_text())
+        self.assertEqual(
+            state["history"][first_request["activation_id"]],
+            RETIRED_ACTIVATION_FINGERPRINT,
+        )
+
+    def test_large_legacy_history_is_compacted_without_losing_replay_tombstones(self) -> None:
+        bridge = PlayerLoadBridge(self.current)
+        state = json.loads(bridge.state_path.read_text())
+        for number in range(1, 2_601):
+            state["history"][uuid.UUID(int=number).hex] = hashlib.sha256(
+                str(number).encode("ascii")
+            ).hexdigest()
+        _write_json(bridge.state_path, state)
+        self.assertGreater(bridge.state_path.stat().st_size, MAX_PERSISTED_STATE_BYTES)
+
+        restarted = PlayerLoadBridge(CharacterConfig.load(self.config_path))
+
+        compacted = json.loads(restarted.state_path.read_text())
+        self.assertLessEqual(restarted.state_path.stat().st_size, MAX_PERSISTED_STATE_BYTES)
+        self.assertEqual(len(compacted["history"]), 2_600)
+        self.assertEqual(
+            set(compacted["history"].values()),
+            {RETIRED_ACTIVATION_FINGERPRINT},
+        )
 
     def test_request_fingerprint_mismatch_stays_pending_and_preserves_current(self) -> None:
         _candidate_raw, request = self._manifest_candidate("f" * 64)
