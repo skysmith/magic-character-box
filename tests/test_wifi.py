@@ -81,7 +81,16 @@ class WifiControllerTests(unittest.TestCase):
                 ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"): subprocess.CompletedProcess(
                     [], 1, "", "NameError: name 'json' is not defined\n"
                 ),
-                ("/usr/bin/nmcli", "--ask", "device", "wifi", "connect", "Mini Cottage"):
+                (
+                    "/usr/bin/nmcli",
+                    "--ask",
+                    "device",
+                    "wifi",
+                    "connect",
+                    "Mini Cottage",
+                    "name",
+                    "story-dock-provisioned-wifi",
+                ):
                     subprocess.CompletedProcess([], 0, "connected\n", ""),
                 ("/usr/local/bin/magic-character-box-wifi-control", "radio-status"): subprocess.CompletedProcess(
                     [], 0, "enabled\n", ""
@@ -105,7 +114,16 @@ class WifiControllerTests(unittest.TestCase):
             runner.commands[:2],
             [
                 ("/usr/local/bin/magic-character-box-wifi-control", "connect-stdin"),
-                ("/usr/bin/nmcli", "--ask", "device", "wifi", "connect", "Mini Cottage"),
+                (
+                    "/usr/bin/nmcli",
+                    "--ask",
+                    "device",
+                    "wifi",
+                    "connect",
+                    "Mini Cottage",
+                    "name",
+                    "story-dock-provisioned-wifi",
+                ),
             ],
         )
         self.assertNotIn("private pass", " ".join(runner.commands[1]))

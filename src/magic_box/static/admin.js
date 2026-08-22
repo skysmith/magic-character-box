@@ -593,13 +593,19 @@ if (wifiPanel) {
     if (payload?.ok === false) {
       [ssidInput, passwordInput].forEach((input) => input?.setAttribute("aria-invalid", "true"));
     }
-    if ((payload?.ok || payload === null) && reconnectSuccess) {
+    if (payload === null) {
+      if (connectStatus) {
+        connectStatus.textContent =
+          "Story Dock lost contact before it could confirm the Wi-Fi password. If it does not join your home Wi-Fi, wait for the StoryDock-Player network to return and try again.";
+      }
+      if (passwordInput) {
+        passwordInput.value = "";
+      }
+      return;
+    }
+    if (payload?.ok && reconnectSuccess) {
       if (reconnectHeading) {
         reconnectHeading.textContent = `Story Dock is connecting to ${ssid}.`;
-      }
-      if (payload === null && connectStatus) {
-        connectStatus.textContent =
-          `The connection request was sent. If your phone disconnected, rejoin ${ssid}; My Story Dock will open when you are back online.`;
       }
       reconnectSuccess.hidden = false;
       if (statusLine) {

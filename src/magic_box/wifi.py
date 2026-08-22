@@ -14,6 +14,7 @@ from typing import Callable
 LOGGER = logging.getLogger(__name__)
 MIN_RECOVERY_PASSWORD_LENGTH = 8
 MAX_RECOVERY_PASSWORD_LENGTH = 63
+MANAGED_WIFI_CONNECTION = "story-dock-provisioned-wifi"
 
 
 @dataclass(frozen=True)
@@ -249,7 +250,14 @@ class WifiController:
         )
 
     def _run_nmcli_connect(self, ssid: str, password: str) -> subprocess.CompletedProcess[str]:
-        args = ["device", "wifi", "connect", ssid]
+        args = [
+            "device",
+            "wifi",
+            "connect",
+            ssid,
+            "name",
+            MANAGED_WIFI_CONNECTION,
+        ]
         if password:
             args.insert(0, "--ask")
         return self._execute(

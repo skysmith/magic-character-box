@@ -39,7 +39,19 @@ class WifiControlHelperTests(unittest.TestCase):
 
         command = run_command.call_args.args[0]
         self.assertNotIn("private pass", command)
-        self.assertEqual(command, ["/usr/bin/nmcli", "--ask", "device", "wifi", "connect", "Test Network"])
+        self.assertEqual(
+            command,
+            [
+                "/usr/bin/nmcli",
+                "--ask",
+                "device",
+                "wifi",
+                "connect",
+                "Test Network",
+                "name",
+                "story-dock-provisioned-wifi",
+            ],
+        )
         self.assertEqual(run_command.call_args.kwargs["input_text"], "private pass\n")
 
     def test_recovery_password_reads_secret_from_stdin_not_command_arguments(self) -> None:

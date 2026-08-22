@@ -130,6 +130,9 @@ class AdminTests(unittest.TestCase):
 
         self.assertIn("beginOwnerReturn();", script)
         self.assertIn("Story Dock is connecting to ${ssid}.", script)
+        self.assertIn("lost contact before it could confirm the Wi-Fi password", script)
+        self.assertIn("wait for the StoryDock-Player network to return", script)
+        self.assertNotIn("payload?.ok || payload === null", script)
         self.assertNotIn("may be joining", script)
         self.assertIn('mode: "no-cors"', script)
         self.assertIn("window.location.assign(ownerUrl);", script)

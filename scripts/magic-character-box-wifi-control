@@ -15,6 +15,7 @@ import tempfile
 
 RECOVERY_ENV = Path(os.getenv("STORY_DOCK_SETUP_HOTSPOT_ENV", "/etc/story-dock/setup-hotspot.env"))
 MAX_SECRET_PAYLOAD_BYTES = 4096
+MANAGED_WIFI_CONNECTION = "story-dock-provisioned-wifi"
 
 
 def main() -> int:
@@ -48,7 +49,15 @@ def main() -> int:
         payload = read_secret_payload()
         ssid = validate_payload_value(payload, "ssid", "Wi-Fi network name")
         password = validate_payload_value(payload, "password", "Wi-Fi password")
-        command = [nmcli, "device", "wifi", "connect", ssid]
+        command = [
+            nmcli,
+            "device",
+            "wifi",
+            "connect",
+            ssid,
+            "name",
+            MANAGED_WIFI_CONNECTION,
+        ]
         if password:
             command.insert(1, "--ask")
         return run_command(command, input_text=f"{password}\n" if password else None)

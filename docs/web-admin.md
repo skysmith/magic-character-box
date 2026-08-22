@@ -316,6 +316,13 @@ full admin page on a trusted local network or trusted Tailscale HTTPS, because
 it still has maintenance controls such as shutdown, backups, scanning, and
 network changes.
 
+Successful connects are saved under the stable NetworkManager profile name
+`story-dock-provisioned-wifi`, independent of the home network's SSID. This
+lets the recovery timer retry the owner-selected network without putting an
+SSID-specific profile name into the product contract. If the recovery page
+loses contact before the Pi confirms the password, it reports the result as
+unconfirmed; it does not turn a dropped request into a success message.
+
 When the privileged helper is installed, both home-network connects and Setup
 Wi-Fi password changes use bounded JSON on standard input. Passwords never
 appear in the helper or `sudo` command arguments. NetworkManager receives a
