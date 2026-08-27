@@ -53,9 +53,11 @@ _PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
 _UID_CACHE_KEY_RE = re.compile(r"sduid1_[0-9a-f]{64}\Z")
 _UID_CACHE_MAX_ENTRIES = 10_000
 _ALIAS_CONFIG_MAX_BYTES = 2 * 1024 * 1024
-_NTAG_PAGE_READ_ATTEMPTS = 3
+_NTAG_PAGE_READ_ATTEMPTS = 5
+_NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
+_NTAG_RF_FIELD_RECOVERY_SETTLE_SECONDS = 0.05
 _PN532_COMMAND_RF_CONFIGURATION = 0x32
 _PN532_COMMAND_READ_REGISTER = 0x06
 _PN532_COMMAND_WRITE_REGISTER = 0x08
@@ -249,11 +251,12 @@ class PN532SPIReader:
 class PN532NDEFReader:
     """Hosted reader whose playback key originates in Story Sticker URL data.
 
-    Luis-suffix tags expose only their public playback alias in one fixed Type
-    2 READ window. The alias must resolve through the authenticated local hosted
-    config to the canonical token-derived playback key. A readable non-suffix
-    window falls back to strict full-NDEF parsing for legacy stickers. Learned
-    UID fingerprints may accelerate later taps, but never become identity.
+    Luis-suffix tags expose their public playback alias in one fixed Type 2
+    READ window. An active alias resolves through authenticated local hosted
+    config to the canonical token-derived playback key. An inactive alias or a
+    readable non-suffix window falls back to strict full-NDEF parsing so a new
+    canonical sticker can reach the ordinary unknown-tag path. Learned UID
+    fingerprints may accelerate later taps, but never become identity.
     """
 
     def __init__(
@@ -301,10 +304,11 @@ class PN532NDEFReader:
                 playback_alias = _story_suffix_alias_from_fast_window(fast_window)
                 if playback_alias is not None:
                     playback_key = self._alias_resolver.resolve(playback_alias)
-                    if playback_key is None:
-                        raise ValueError("Story Sticker playback alias was not active")
-                    self._uid_cache.remember(tag_present, playback_key)
-                    return playback_key
+                    if playback_key is not None:
+                        self._uid_cache.remember(tag_present, playback_key)
+                        return playback_key
+                    if self._alias_resolver.is_ambiguous(playback_alias):
+                        raise ValueError("Story Sticker playback alias was ambiguous")
 
             # A window that was readable but does not exactly match the
             # shortcut contract may be a legacy V1 sticker. An unreadable fast
@@ -323,8 +327,10 @@ class PN532NDEFReader:
             )
             if playback_alias is not None:
                 resolved_key = self._alias_resolver.resolve(playback_alias)
-                if resolved_key != playback_key:
-                    raise ValueError("Story Sticker playback alias was not active")
+                if self._alias_resolver.is_ambiguous(playback_alias):
+                    raise ValueError("Story Sticker playback alias was ambiguous")
+                if resolved_key is not None and resolved_key != playback_key:
+                    raise ValueError("Story Sticker playback alias did not match verified URL")
             self._uid_cache.remember(tag_present, playback_key)
             return playback_key
         except Exception as exc:
@@ -433,12 +439,21 @@ class _PlaybackAliasResolver:
         self.path = path.expanduser().resolve()
         self._fingerprint: tuple[int, int, int] | None = None
         self._aliases: dict[str, str] = {}
+        self._ambiguous_aliases: set[str] = set()
 
     def resolve(self, playback_alias: str) -> str | None:
         if _STORY_PLAYBACK_ALIAS_RE.fullmatch(playback_alias) is None:
             return None
         self._reload_if_changed()
         return self._aliases.get(playback_alias)
+
+    def is_ambiguous(self, playback_alias: str) -> bool:
+        """Return whether authenticated config assigns one alias more than once."""
+
+        if _STORY_PLAYBACK_ALIAS_RE.fullmatch(playback_alias) is None:
+            return False
+        self._reload_if_changed()
+        return playback_alias in self._ambiguous_aliases
 
     def _reload_if_changed(self) -> None:
         try:
@@ -454,6 +469,7 @@ class _PlaybackAliasResolver:
         except (OSError, TypeError, ValueError):
             self._fingerprint = None
             self._aliases = {}
+            self._ambiguous_aliases = set()
             return
 
         aliases: dict[str, str] = {}
@@ -483,6 +499,7 @@ class _PlaybackAliasResolver:
             aliases.pop(alias, None)
         self._fingerprint = fingerprint
         self._aliases = aliases
+        self._ambiguous_aliases = ambiguous
 
 
 def _story_suffix_alias_from_fast_window(window: bytes) -> str | None:
@@ -600,7 +617,8 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
         "NDEF URI was not HTTPS": "uri-scheme",
         "NDEF URI was invalid": "uri-encoding",
         "Story Sticker URL was invalid": "story-url",
-        "Story Sticker playback alias was not active": "playback-alias",
+        "Story Sticker playback alias was ambiguous": "playback-alias",
+        "Story Sticker playback alias did not match verified URL": "playback-alias",
     }.get(str(exc), "unclassified")
 
 
@@ -654,8 +672,12 @@ def _read_ntag_window(pn532: Any, page: int) -> bytes:
             wrong_size = True
         if attempt + 1 < _NTAG_PAGE_READ_ATTEMPTS:
             # A failed Type 2 command can leave the PN532 without an active
-            # target. Re-select the still-present sticker before retrying;
-            # the returned UID is deliberately ignored and is never identity.
+            # target. First use ordinary re-selection. After those bounded
+            # retries are exhausted, cycle only the reader's RF field once to
+            # recover a wedged target exchange, then re-select. The returned
+            # UID is deliberately ignored and is never identity.
+            if attempt + 1 == _NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS:
+                _recover_pn532_type2_rf_field(pn532)
             try:
                 pn532.read_passive_target(timeout=_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS)
             except Exception:
@@ -664,6 +686,29 @@ def _read_ntag_window(pn532: Any, page: int) -> bytes:
     if wrong_size:
         raise ValueError("NTAG page had the wrong size")
     raise ValueError("NTAG page could not be read")
+
+
+def _recover_pn532_type2_rf_field(pn532: Any) -> None:
+    """Best-effort one-shot RF reset after ordinary Type 2 retries fail."""
+
+    try:
+        pn532.call_function(
+            _PN532_COMMAND_RF_CONFIGURATION,
+            params=[_PN532_RF_CONFIG_RF_FIELD, 0x00],
+        )
+    except Exception:
+        return
+
+    try:
+        time.sleep(_NTAG_RF_FIELD_RECOVERY_SETTLE_SECONDS)
+    finally:
+        try:
+            pn532.call_function(
+                _PN532_COMMAND_RF_CONFIGURATION,
+                params=[_PN532_RF_CONFIG_RF_FIELD, 0x01],
+            )
+        except Exception:
+            pass
 
 
 def _complete_tlv_prefix_end(memory: bytes | bytearray) -> int | None:

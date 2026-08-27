@@ -96,8 +96,9 @@ that both the phone and a hosted-mode dock can use:
 - The phone opens the NDEF URL for recording.
 - A dock started with `--nfc pn532-ndef` either verifies a complete legacy URL
   or reads the public suffix of a Luis-suffix URL from absolute page 19. The
-  suffix must resolve through authenticated hosted config to an opaque
-  `sdpk1_...` playback key.
+  suffix uses authenticated hosted config as the fast path to an opaque
+  `sdpk1_...` playback key. When a canonical suffix is not active yet, the
+  reader verifies the complete URL so the sticker reaches the unknown-tag cue.
 
 The open-source dashboard's `Story stickers` tool remains a separate local
 maker flow. It creates a `/story/<token>` link and stores it in
@@ -115,6 +116,10 @@ token, or raw UID. A learned hashed UID cache may skip later RF reads only
 after URL or active-alias verification and is invalidated when its playback key
 is no longer configured.
 
+An active alias mismatch or ambiguous hosted alias fails closed. A transient
+Type 2 page failure gets bounded target re-selection followed by one bounded
+RF-field recovery; the reader never falls back to physical UID identity.
+
 For a factory-encoded tag batch, the supplier may still return a manufacturing
 manifest for QA and traceability:
 
@@ -123,9 +128,11 @@ printed Sticker ID -> exact encoded URL -> optional NFC UID diagnostic
 ```
 
 The runtime playback identity remains the token-derived hosted playback key;
-the suffix only lets the dock reach that key with one reliable short read. The
-phone recording flow and dock playback flow meet without asking a normal user
-to write NFC tags or manually bind a UID at home.
+the suffix lets an already-synced dock reach that key with one reliable short
+read. A not-yet-claimed suffix is confirmed from the complete URL and reported
+as unknown until the account manifest activates it. The phone recording flow
+and dock playback flow meet without asking a normal user to write NFC tags or
+manually bind a UID at home.
 
 ## Troubleshooting
 

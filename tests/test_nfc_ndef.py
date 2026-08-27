@@ -162,9 +162,9 @@ class PN532NDEFReaderTests(unittest.TestCase):
             with self.assertRaisesRegex(NFCError, r"\(page-size\)") as raised:
                 _ndef_reader(fake).read_uid()
 
-        # Three bounded fast-window attempts, then three bounded full-NDEF
+        # Five bounded fast-window attempts, then five bounded full-NDEF
         # attempts before the same value-free page-size rejection.
-        self.assertEqual(fake.mifare_classic_read_block.call_count, 6)
+        self.assertEqual(fake.mifare_classic_read_block.call_count, 10)
         self.assertNotIn("04-A1", str(raised.exception))
         self.assertNotIn(private_token, str(raised.exception))
 
@@ -173,14 +173,14 @@ class PN532NDEFReaderTests(unittest.TestCase):
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
-            transient_page_failures={19: 3},
+            transient_page_failures={19: 5},
         )
 
         with patch("magic_box.nfc.time.sleep"):
             key = _ndef_reader(fake).read_uid()
 
         self.assertEqual(key, story_playback_key_from_token(token))
-        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
+        self.assertEqual(fake.read_pages[:6], [19, 19, 19, 19, 19, 4])
 
     def test_unreadable_fast_window_uses_strict_suffix_full_ndef_fallback(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
@@ -190,7 +190,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             memory=_type2_memory(
                 _uri_record(f"{ORIGIN}/s/{private_token}/SD03-0001")
             ),
-            transient_page_failures={19: 3},
+            transient_page_failures={19: 5},
         )
 
         with tempfile.TemporaryDirectory() as temp_dir, patch("magic_box.nfc.time.sleep"):
@@ -198,7 +198,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key = _ndef_reader(fake, config_path=config_path).read_uid()
 
         self.assertEqual(key, playback_key)
-        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
+        self.assertEqual(fake.read_pages[:6], [19, 19, 19, 19, 19, 4])
 
     def test_readable_non_suffix_window_uses_strict_legacy_full_ndef_fallback(self) -> None:
         token = "legacy-fallback-token"
@@ -255,8 +255,9 @@ class PN532NDEFReaderTests(unittest.TestCase):
             self.assertTrue(cache_path.exists())
             self.assertNotIn("04-A1-22-9B", cache_path.read_text(encoding="utf-8"))
 
-    def test_suffix_alias_missing_from_active_config_fails_without_uid_or_url_fallback(self) -> None:
+    def test_suffix_alias_missing_from_active_config_uses_verified_url_identity(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(private_token)
         fake = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
@@ -267,10 +268,31 @@ class PN532NDEFReaderTests(unittest.TestCase):
             config_path = Path(temp_dir) / "config" / "characters.json"
             config_path.parent.mkdir(parents=True)
             config_path.write_text("{}", encoding="utf-8")
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
+
+        self.assertEqual(key, playback_key)
+        self.assertEqual(fake.read_pages[:3], [19, 4, 3])
+        self.assertNotIn(private_token, key or "")
+
+    def test_active_suffix_alias_mismatch_fails_after_complete_url_verification(self) -> None:
+        private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        other_token = "0123456789abcdefghijklmnopqrstuv"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(
+                _uri_record(
+                    f"{ORIGIN}/s/{private_token}/SD03-0001", prefix_code=0x00
+                )
+            ),
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = _write_hosted_config(
+                Path(temp_dir), story_playback_key_from_token(other_token), "SD03-0001"
+            )
             with self.assertRaisesRegex(NFCError, r"\(playback-alias\)") as raised:
                 _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(fake.read_pages, [19])
+        self.assertGreater(len(fake.read_pages), 1)
         self.assertNotIn(private_token, str(raised.exception))
         self.assertNotIn("04-A1", str(raised.exception))
 
@@ -381,6 +403,22 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(fake.page_read_attempts[4], 2)
         self.assertGreaterEqual(sleep.call_count, 3)
         self.assertEqual(fake.selection_attempts, 4)
+
+    def test_persistent_page_failure_cycles_rf_field_once_before_recovery(self) -> None:
+        token = "rf-field-recovery-token"
+        fake = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+            transient_page_failures={19: 3},
+        )
+
+        with patch("magic_box.nfc.time.sleep") as sleep:
+            key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_playback_key_from_token(token))
+        self.assertEqual(fake.read_pages, [19, 19, 19, 19, 4, 3, 8, 12, 16])
+        self.assertEqual(fake.rf_field_calls, [(0x32, [0x01, 0x00]), (0x32, [0x01, 0x01])])
+        self.assertIn(unittest.mock.call(0.05), sleep.call_args_list)
 
     def test_truncated_tlv_without_terminator_fails_closed(self) -> None:
         token = "truncated-token"
@@ -619,6 +657,7 @@ class _FakePN532:
         self.selection_attempts = 0
         self.transient_page_failures = dict(transient_page_failures or {})
         self.page_read_attempts: dict[int, int] = {}
+        self.rf_field_calls: list[tuple[int, list[int]]] = []
 
     def read_passive_target(self, *, timeout: float) -> bytes | None:
         self.selection_attempts += 1
@@ -635,6 +674,17 @@ class _FakePN532:
         if any(value is None for value in pages):
             return None
         return b"".join(value for value in pages if value is not None)
+
+    def call_function(
+        self,
+        command: int,
+        *,
+        params: list[int],
+        response_length: int | None = None,
+    ) -> bytes:
+        del response_length
+        self.rf_field_calls.append((command, params))
+        return b""
 
 
 class _FakeRFConfiguration:

@@ -104,6 +104,66 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
         self.assertEqual(fake_pn532.page_read_attempts, {19: 3})
         self.assertEqual(fake_pn532.selection_attempts, 3)
 
+    def test_unclaimed_suffix_url_reaches_unknown_tone_after_complete_verification(self) -> None:
+        """A canonical new sticker is unknown, not a reader rejection."""
+
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(token)
+        fake_pn532 = _FakePN532(
+            uid=b"\x04\xA1\x22\x9B",
+            memory=_type2_memory(
+                _uri_record(f"{ORIGIN}/s/{token}/SD03-0001")
+            ),
+            transient_page_failures={},
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            config_path = root / "config" / "characters.json"
+            config_path.parent.mkdir()
+            config_path.write_text("{}", encoding="utf-8")
+            unknown_sound = root / "audio" / "system" / "unknown-tag.mp3"
+            unknown_sound.parent.mkdir(parents=True)
+            unknown_sound.write_bytes(b"synthetic unknown cue")
+
+            with patch("magic_box.nfc._open_pn532_spi", return_value=fake_pn532):
+                ndef_reader = PN532NDEFReader(config_path=config_path)
+
+            player = MagicMock()
+            player.play_file.return_value = True
+            with patch(
+                "magic_box.app.create_reader",
+                return_value=_OneNDEFTagThenTerminateReader(ndef_reader),
+            ), patch(
+                "magic_box.app.AudioPlayer",
+                return_value=player,
+            ), patch(
+                "magic_box.app._safe_record_tag",
+            ) as record_tag, patch(
+                "magic_box.app._safe_append_event",
+            ), self.assertLogs("magic_box.app", level="INFO"):
+                result = main(
+                    [
+                        "--config",
+                        str(config_path),
+                        "--nfc",
+                        "pn532-ndef",
+                        "--startup-sound",
+                        "",
+                    ]
+                )
+
+        self.assertEqual(result, 0)
+        player.play_file.assert_called_once_with(unknown_sound.resolve())
+        player.play_folder.assert_not_called()
+        record_tag.assert_called_once_with(
+            unittest.mock.ANY,
+            playback_key,
+            known=False,
+            source="playback",
+        )
+        self.assertGreater(len(fake_pn532.page_read_attempts), 1)
+
 
 class _OneNDEFTagThenTerminateReader:
     def __init__(self, reader: PN532NDEFReader) -> None:
@@ -116,6 +176,9 @@ class _OneNDEFTagThenTerminateReader:
             return self.reader.read_uid()
         _handle_service_stop(signal.SIGTERM, None)
         return None
+
+    def invalidate_cached_identity(self, playback_key: str) -> None:
+        self.reader.invalidate_cached_identity(playback_key)
 
 
 class _FakePN532:

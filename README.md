@@ -68,8 +68,10 @@ customer/product strategy.
 - Offers an explicit `pn532-ndef` hosted mode that identifies a Story Sticker
   from either a verified legacy `https://tap.getstorydock.com/s/<token>` URL or
   a versioned `https://tap.getstorydock.com/s/<T32>/SD03-0001` URL. The suffix
-  path resolves its public alias through authenticated hosted config to the
-  same opaque `sdpk1_...` identity. UID is only a learned local acceleration.
+  path resolves an active public alias through authenticated hosted config to
+  the same opaque `sdpk1_...` identity. A new inactive suffix is verified from
+  its complete URL and reaches the ordinary unknown-tag cue. UID is only a
+  learned local acceleration.
 - Normalizes UIDs such as `04:a1:22:9b` to `04-A1-22-9B`.
 - Looks up characters in `config/characters.json`.
 - Stops current playback when a different known character is scanned.
@@ -169,11 +171,15 @@ python -m magic_box.app --nfc pn532-ndef
 
 In `pn532-ndef` mode, the tag must contain exactly one canonical Story Dock
 NDEF HTTPS URI record. Legacy URLs are parsed completely. New suffix URLs put
-the public `SDxx-xxxx` alias in a fixed page-19 read window; the player accepts
-that alias only when the active hosted config maps it to a canonical
-token-derived `sdpk1_...` key. A hashed local UID binding can accelerate later
-taps but is never returned or configured as identity. URLs, tokens, and raw
-UIDs are not written to logs or hosted config.
+the public `SDxx-xxxx` alias in a fixed page-19 read window. An active alias is
+accepted only when authenticated hosted config maps it to a canonical
+token-derived `sdpk1_...` key. An inactive alias triggers strict complete-URL
+verification and the resulting key follows the ordinary unknown-tag path;
+ambiguous or mismatched active aliases fail closed. A hashed local UID binding
+can accelerate later taps but is never returned or configured as identity.
+URLs, tokens, and raw UIDs are not written to logs or hosted config. A failed
+Type 2 page exchange receives bounded target re-selection and one bounded RF
+field recovery before the value-free read failure is reported.
 
 ## Scan A Tag
 
