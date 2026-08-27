@@ -128,7 +128,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
                     )
                     self.assertEqual(fake.read_pages, [19])
 
-    def test_suffix_fast_window_failure_immediately_uses_full_ndef_without_uid_identity(self) -> None:
+    def test_suffix_fast_window_retries_are_bounded_and_never_use_uid_as_identity(self) -> None:
         token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         url = f"{ORIGIN}/s/{token}/SD03-0001"
         fake = _FakePN532(
@@ -144,9 +144,9 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key = _ndef_reader(fake, config_path=config_path).read_uid()
 
         self.assertEqual(key, story_playback_key_from_token(token))
-        self.assertEqual(fake.read_pages[:3], [19, 4, 3])
-        self.assertEqual(fake.selection_attempts, 1)
-        sleep.assert_not_called()
+        self.assertEqual(fake.read_pages, [19, 19, 19])
+        self.assertEqual(fake.selection_attempts, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_suffix_wrong_size_window_fails_closed_with_value_free_reason(self) -> None:
         private_token = "mustneverappearxxxxxxxxxxxxxxxxx"
@@ -162,9 +162,9 @@ class PN532NDEFReaderTests(unittest.TestCase):
             with self.assertRaisesRegex(NFCError, r"\(page-size\)") as raised:
                 _ndef_reader(fake).read_uid()
 
-        # One shortcut attempt preserves the physical tap for the five bounded
-        # full-NDEF attempts before the same value-free page-size rejection.
-        self.assertEqual(fake.mifare_classic_read_block.call_count, 6)
+        # Three bounded shortcut attempts, then five bounded full-NDEF
+        # attempts before the same value-free page-size rejection.
+        self.assertEqual(fake.mifare_classic_read_block.call_count, 8)
         self.assertNotIn("04-A1", str(raised.exception))
         self.assertNotIn(private_token, str(raised.exception))
 
@@ -180,7 +180,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key = _ndef_reader(fake).read_uid()
 
         self.assertEqual(key, story_playback_key_from_token(token))
-        self.assertEqual(fake.read_pages[:2], [19, 4])
+        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
 
     def test_unreadable_fast_window_uses_strict_suffix_full_ndef_fallback(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
@@ -198,7 +198,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             key = _ndef_reader(fake, config_path=config_path).read_uid()
 
         self.assertEqual(key, playback_key)
-        self.assertEqual(fake.read_pages[:2], [19, 4])
+        self.assertEqual(fake.read_pages[:4], [19, 19, 19, 4])
 
     def test_readable_non_suffix_window_uses_strict_legacy_full_ndef_fallback(self) -> None:
         token = "legacy-fallback-token"
@@ -255,7 +255,7 @@ class PN532NDEFReaderTests(unittest.TestCase):
             self.assertTrue(cache_path.exists())
             self.assertNotIn("04-A1-22-9B", cache_path.read_text(encoding="utf-8"))
 
-    def test_suffix_alias_missing_from_active_config_uses_verified_url_identity(self) -> None:
+    def test_suffix_alias_missing_from_active_config_returns_discovery_only_key(self) -> None:
         private_token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
         playback_key = story_playback_key_from_token(private_token)
         fake = _FakePN532(
@@ -270,8 +270,9 @@ class PN532NDEFReaderTests(unittest.TestCase):
             config_path.write_text("{}", encoding="utf-8")
             key = _ndef_reader(fake, config_path=config_path).read_uid()
 
-        self.assertEqual(key, playback_key)
-        self.assertEqual(fake.read_pages[:3], [19, 4, 3])
+        self.assertEqual(key, "story-sticker-unclaimed")
+        self.assertEqual(fake.read_pages, [19])
+        self.assertNotEqual(key, playback_key)
         self.assertNotIn(private_token, key or "")
 
     def test_active_suffix_alias_mismatch_fails_after_complete_url_verification(self) -> None:

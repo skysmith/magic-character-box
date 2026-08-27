@@ -101,17 +101,13 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             character_name="URL-selected memory",
             source="playback",
         )
-        self.assertEqual(
-            fake_pn532.page_read_attempts,
-            {19: 1, 4: 1, 3: 1, 8: 1, 12: 1, 16: 1, 20: 1},
-        )
-        self.assertEqual(fake_pn532.selection_attempts, 1)
+        self.assertEqual(fake_pn532.page_read_attempts, {19: 3})
+        self.assertEqual(fake_pn532.selection_attempts, 3)
 
     def test_unclaimed_suffix_url_reaches_unknown_tone_after_complete_verification(self) -> None:
         """A canonical new sticker is unknown, not a reader rejection."""
 
         token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
-        playback_key = story_playback_key_from_token(token)
         fake_pn532 = _FakePN532(
             uid=b"\x04\xA1\x22\x9B",
             memory=_type2_memory(
@@ -161,11 +157,11 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
         player.play_folder.assert_not_called()
         record_tag.assert_called_once_with(
             unittest.mock.ANY,
-            playback_key,
+            "story-sticker-unclaimed",
             known=False,
             source="playback",
         )
-        self.assertGreater(len(fake_pn532.page_read_attempts), 1)
+        self.assertEqual(fake_pn532.page_read_attempts, {19: 1})
 
 
 class _OneNDEFTagThenTerminateReader:

@@ -49,6 +49,8 @@ _STORY_SUFFIX_FAST_PATH_PAGE = 19
 _STORY_SUFFIX_FAST_WINDOW_RE = re.compile(
     rb"[A-Za-z0-9_-]{2}/([A-Z0-9]{4}-(?!0000)[0-9]{4})\xFE\x00\x00\x00\Z"
 )
+_STORY_SUFFIX_FAST_PATH_ATTEMPTS = 3
+_UNCLAIMED_STORY_STICKER_KEY = "story-sticker-unclaimed"
 _PLAYBACK_KEY_RE = re.compile(r"sdpk1_[0-9a-f]{64}\Z")
 _UID_CACHE_KEY_RE = re.compile(r"sduid1_[0-9a-f]{64}\Z")
 _UID_CACHE_MAX_ENTRIES = 10_000
@@ -249,13 +251,13 @@ class PN532SPIReader:
 
 
 class PN532NDEFReader:
-    """Hosted reader whose playback key originates in Story Sticker URL data.
+    """Hosted reader whose playable identity originates in Story Sticker URL data.
 
     Luis-suffix tags expose their public playback alias in one fixed Type 2
     READ window. An active alias resolves through authenticated local hosted
-    config to the canonical token-derived playback key. An inactive alias or a
-    readable non-suffix window falls back to strict full-NDEF parsing so a new
-    canonical sticker can reach the ordinary unknown-tag path. Learned UID
+    config to the canonical token-derived playback key. An exact inactive alias
+    receives only a constant, non-playable discovery key. A readable
+    non-suffix window falls back to strict full-NDEF parsing. Learned UID
     fingerprints may accelerate later taps, but never become identity.
     """
 
@@ -307,16 +309,14 @@ class PN532NDEFReader:
 
         try:
             try:
-                # The shortcut is an optimization, not an authority boundary.
-                # Give it one immediate exchange only: spending the complete
-                # retry budget on page 19 can consume a natural tap before the
-                # strict full-NDEF fallback even begins. The authoritative
-                # read below retains the full bounded reselect/RF-recovery
-                # budget for both unknown and known canonical Stickers.
+                # The shortcut is the reliable current-format discovery path.
+                # It can select mapped audio only through authenticated hosted
+                # config. An exact but inactive suffix receives a constant
+                # discovery-only key below; it never gains playback identity.
                 fast_window = _read_ntag_window(
                     self._pn532,
                     _STORY_SUFFIX_FAST_PATH_PAGE,
-                    attempts=1,
+                    attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
                 )
             except ValueError:
                 # A transient shortcut-window failure may still be recovered
@@ -335,11 +335,20 @@ class PN532NDEFReader:
                         return playback_key
                     if self._alias_resolver.is_ambiguous(playback_alias):
                         raise ValueError("Story Sticker playback alias was ambiguous")
+                    # This value is deliberately constant and cannot select a
+                    # memory. It lets a structurally exact current Story
+                    # Sticker produce the generic discovery cue before first
+                    # Save, without requiring a fragile multi-window read of
+                    # its private URL token.
+                    self._remember_current_placement(
+                        present_uid_cache_key,
+                        _UNCLAIMED_STORY_STICKER_KEY,
+                    )
+                    return _UNCLAIMED_STORY_STICKER_KEY
 
-            # A window that was readable but does not exactly match the
-            # shortcut contract may be a legacy V1 sticker. An unreadable fast
-            # window may also be a transient transport failure. In either case,
-            # only a strict complete NDEF parse is allowed to recover.
+            # A readable nonmatching window may be a legacy V1 Sticker. An
+            # unreadable shortcut may also be a transient transport failure.
+            # In either case, only a strict complete NDEF parse may recover.
             type2_memory = _read_type2_tlv_memory(self._pn532)
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)

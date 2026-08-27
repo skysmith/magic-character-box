@@ -97,8 +97,9 @@ that both the phone and a hosted-mode dock can use:
 - A dock started with `--nfc pn532-ndef` either verifies a complete legacy URL
   or reads the public suffix of a Luis-suffix URL from absolute page 19. The
   suffix uses authenticated hosted config as the fast path to an opaque
-  `sdpk1_...` playback key. When a canonical suffix is not active yet, the
-  reader verifies the complete URL so the sticker reaches the unknown-tag cue.
+  `sdpk1_...` playback key. When an exact suffix is not active yet, the reader
+  returns only a constant discovery key so the Sticker reaches the unknown-tag
+  cue; it cannot select audio until authenticated hosted config maps it.
 
 The open-source dashboard's `Story stickers` tool remains a separate local
 maker flow. It creates a `/story/<token>` link and stores it in
@@ -117,8 +118,8 @@ after URL or active-alias verification and is invalidated when its playback key
 is no longer configured.
 
 An active alias mismatch or ambiguous hosted alias fails closed. The page-19
-shortcut gets one immediate exchange before strict complete-NDEF fallback so
-it cannot consume a natural tap. A transient authoritative Type 2 page failure
+shortcut gets bounded retries before strict complete-NDEF fallback. A
+transient authoritative Type 2 page failure
 gets bounded target re-selection followed by one bounded RF-field recovery;
 the reader never falls back to physical UID identity. After strict URL
 verification, the current physical placement may reuse its opaque key only
