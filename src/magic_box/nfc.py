@@ -279,6 +279,8 @@ class PN532NDEFReader:
             config_path = Path(configured_path).expanduser()
         self._alias_resolver = _PlaybackAliasResolver(config_path)
         self._pn532 = _open_pn532_spi(type2_receiver=True)
+        self._present_uid_cache_key: str | None = None
+        self._present_playback_key: str | None = None
 
     def read_uid(self) -> str | None:
         try:
@@ -287,10 +289,20 @@ class PN532NDEFReader:
             raise NFCError("Could not read PN532 tag.") from None
 
         if tag_present is None:
+            self._present_uid_cache_key = None
+            self._present_playback_key = None
             return None
+
+        present_uid_cache_key = _uid_cache_key(tag_present)
+        if (
+            present_uid_cache_key == self._present_uid_cache_key
+            and self._present_playback_key is not None
+        ):
+            return self._present_playback_key
 
         cached_key = self._uid_cache.lookup(tag_present)
         if cached_key is not None:
+            self._remember_current_placement(present_uid_cache_key, cached_key)
             return cached_key
 
         try:
@@ -316,6 +328,10 @@ class PN532NDEFReader:
                     playback_key = self._alias_resolver.resolve(playback_alias)
                     if playback_key is not None:
                         self._uid_cache.remember(tag_present, playback_key)
+                        self._remember_current_placement(
+                            present_uid_cache_key,
+                            playback_key,
+                        )
                         return playback_key
                     if self._alias_resolver.is_ambiguous(playback_alias):
                         raise ValueError("Story Sticker playback alias was ambiguous")
@@ -342,6 +358,10 @@ class PN532NDEFReader:
                 if resolved_key is not None and resolved_key != playback_key:
                     raise ValueError("Story Sticker playback alias did not match verified URL")
             self._uid_cache.remember(tag_present, playback_key)
+            self._remember_current_placement(
+                present_uid_cache_key,
+                playback_key,
+            )
             return playback_key
         except Exception as exc:
             # Do not include the underlying parse error, URL, or token in an
@@ -354,9 +374,19 @@ class PN532NDEFReader:
             ) from None
 
     def invalidate_cached_identity(self, playback_key: str) -> None:
-        """Forget learned bindings that no longer exist in the active manifest."""
+        """Forget persistent bindings while preserving this verified placement."""
 
         self._uid_cache.forget_playback_key(playback_key)
+
+    def _remember_current_placement(
+        self,
+        uid_cache_key: str,
+        playback_key: str,
+    ) -> None:
+        """Reuse one verified URL only until the reader observes tag removal."""
+
+        self._present_uid_cache_key = uid_cache_key
+        self._present_playback_key = playback_key
 
 
 class _NDEFUIDCache:

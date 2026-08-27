@@ -120,7 +120,10 @@ An active alias mismatch or ambiguous hosted alias fails closed. The page-19
 shortcut gets one immediate exchange before strict complete-NDEF fallback so
 it cannot consume a natural tap. A transient authoritative Type 2 page failure
 gets bounded target re-selection followed by one bounded RF-field recovery;
-the reader never falls back to physical UID identity.
+the reader never falls back to physical UID identity. After strict URL
+verification, the current physical placement may reuse its opaque key only
+until the reader first observes removal, avoiding a second NDEF exchange while
+the same Sticker is being lifted.
 
 For a factory-encoded tag batch, the supplier may still return a manufacturing
 manifest for QA and traceability:

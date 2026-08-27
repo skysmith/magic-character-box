@@ -352,6 +352,28 @@ class PN532NDEFReaderTests(unittest.TestCase):
             self.assertEqual(second_key, playback_key)
             self.assertGreater(len(second_fake.read_pages), 1)
 
+    def test_unknown_invalidation_reuses_only_the_current_verified_placement(self) -> None:
+        token = "current-placement-token"
+        uid = b"\x04\xA1\x22\x9B"
+        fake = _FakePN532(
+            uid=uid,
+            memory=_type2_memory(_uri_record(f"{ORIGIN}/s/{token}")),
+        )
+        reader = _ndef_reader(fake)
+
+        first_key = reader.read_uid()
+        first_read_count = len(fake.read_pages)
+        reader.invalidate_cached_identity(first_key or "")
+
+        self.assertEqual(reader.read_uid(), first_key)
+        self.assertEqual(len(fake.read_pages), first_read_count)
+
+        fake.uid = None
+        self.assertIsNone(reader.read_uid())
+        fake.uid = uid
+        self.assertEqual(reader.read_uid(), first_key)
+        self.assertGreater(len(fake.read_pages), first_read_count)
+
     def test_no_tag_returns_none_without_reading_memory(self) -> None:
         fake = _FakePN532(uid=None, memory=b"")
         reader = _ndef_reader(fake)

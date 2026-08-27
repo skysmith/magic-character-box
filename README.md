@@ -176,7 +176,9 @@ accepted only when authenticated hosted config maps it to a canonical
 token-derived `sdpk1_...` key. An inactive alias triggers strict complete-URL
 verification and the resulting key follows the ordinary unknown-tag path;
 ambiguous or mismatched active aliases fail closed. A hashed local UID binding
-can accelerate later taps but is never returned or configured as identity.
+can accelerate later taps but is never returned or configured as identity. A
+strictly verified current placement is also reused only until the reader first
+observes removal, preventing lift-edge polls from restarting the NDEF exchange.
 URLs, tokens, and raw UIDs are not written to logs or hosted config. A failed
 page-19 shortcut immediately yields to the authoritative complete-NDEF read so
 it cannot consume a natural tap. A failed authoritative Type 2 page exchange
