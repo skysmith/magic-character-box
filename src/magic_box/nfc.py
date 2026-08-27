@@ -295,7 +295,17 @@ class PN532NDEFReader:
 
         try:
             try:
-                fast_window = _read_ntag_window(self._pn532, _STORY_SUFFIX_FAST_PATH_PAGE)
+                # The shortcut is an optimization, not an authority boundary.
+                # Give it one immediate exchange only: spending the complete
+                # retry budget on page 19 can consume a natural tap before the
+                # strict full-NDEF fallback even begins. The authoritative
+                # read below retains the full bounded reselect/RF-recovery
+                # budget for both unknown and known canonical Stickers.
+                fast_window = _read_ntag_window(
+                    self._pn532,
+                    _STORY_SUFFIX_FAST_PATH_PAGE,
+                    attempts=1,
+                )
             except ValueError:
                 # A transient shortcut-window failure may still be recovered
                 # by verifying the complete exact URL.
@@ -658,9 +668,16 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
     raise ValueError("Type 2 data did not contain a complete TLV stream")
 
 
-def _read_ntag_window(pn532: Any, page: int) -> bytes:
+def _read_ntag_window(
+    pn532: Any,
+    page: int,
+    *,
+    attempts: int = _NTAG_PAGE_READ_ATTEMPTS,
+) -> bytes:
     wrong_size = False
-    for attempt in range(_NTAG_PAGE_READ_ATTEMPTS):
+    if attempts < 1 or attempts > _NTAG_PAGE_READ_ATTEMPTS:
+        raise ValueError("NTAG page read attempt budget was invalid")
+    for attempt in range(attempts):
         try:
             block = pn532.mifare_classic_read_block(page)
         except Exception:
@@ -670,7 +687,7 @@ def _read_ntag_window(pn532: Any, page: int) -> bytes:
             if len(value) == _NTAG_READ_WINDOW_BYTES:
                 return value
             wrong_size = True
-        if attempt + 1 < _NTAG_PAGE_READ_ATTEMPTS:
+        if attempt + 1 < attempts:
             # A failed Type 2 command can leave the PN532 without an active
             # target. First use ordinary re-selection. After those bounded
             # retries are exhausted, cycle only the reader's RF field once to

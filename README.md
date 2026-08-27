@@ -178,8 +178,10 @@ verification and the resulting key follows the ordinary unknown-tag path;
 ambiguous or mismatched active aliases fail closed. A hashed local UID binding
 can accelerate later taps but is never returned or configured as identity.
 URLs, tokens, and raw UIDs are not written to logs or hosted config. A failed
-Type 2 page exchange receives bounded target re-selection and one bounded RF
-field recovery before the value-free read failure is reported.
+page-19 shortcut immediately yields to the authoritative complete-NDEF read so
+it cannot consume a natural tap. A failed authoritative Type 2 page exchange
+receives bounded target re-selection and one bounded RF-field recovery before
+the value-free read failure is reported.
 
 ## Scan A Tag
 

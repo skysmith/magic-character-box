@@ -101,8 +101,11 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             character_name="URL-selected memory",
             source="playback",
         )
-        self.assertEqual(fake_pn532.page_read_attempts, {19: 3})
-        self.assertEqual(fake_pn532.selection_attempts, 3)
+        self.assertEqual(
+            fake_pn532.page_read_attempts,
+            {19: 1, 4: 1, 3: 1, 8: 1, 12: 1, 16: 1, 20: 1},
+        )
+        self.assertEqual(fake_pn532.selection_attempts, 1)
 
     def test_unclaimed_suffix_url_reaches_unknown_tone_after_complete_verification(self) -> None:
         """A canonical new sticker is unknown, not a reader rejection."""

@@ -116,9 +116,11 @@ token, or raw UID. A learned hashed UID cache may skip later RF reads only
 after URL or active-alias verification and is invalidated when its playback key
 is no longer configured.
 
-An active alias mismatch or ambiguous hosted alias fails closed. A transient
-Type 2 page failure gets bounded target re-selection followed by one bounded
-RF-field recovery; the reader never falls back to physical UID identity.
+An active alias mismatch or ambiguous hosted alias fails closed. The page-19
+shortcut gets one immediate exchange before strict complete-NDEF fallback so
+it cannot consume a natural tap. A transient authoritative Type 2 page failure
+gets bounded target re-selection followed by one bounded RF-field recovery;
+the reader never falls back to physical UID identity.
 
 For a factory-encoded tag batch, the supplier may still return a manufacturing
 manifest for QA and traceability:
