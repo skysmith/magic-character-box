@@ -95,8 +95,9 @@ that both the phone and a hosted-mode dock can use:
 
 - The phone opens the NDEF URL for recording.
 - A dock started with `--nfc pn532-ndef` either verifies a complete legacy URL
-  or reads the public suffix of a Luis-suffix URL from absolute page 19. The
-  suffix uses authenticated hosted config as the fast path to an opaque
+  or reconstructs the public suffix of a versioned URL from two
+  four-page-aligned NTAG reads. The suffix uses authenticated hosted config as
+  the fast path to an opaque
   `sdpk1_...` playback key. When an exact suffix is not active yet, the reader
   returns only a constant discovery key so the Sticker reaches the unknown-tag
   cue; it cannot select audio until authenticated hosted config maps it.
@@ -117,14 +118,26 @@ token, or raw UID. A learned hashed UID cache may skip later RF reads only
 after URL or active-alias verification and is invalidated when its playback key
 is no longer configured.
 
-An active alias mismatch or ambiguous hosted alias fails closed. The page-19
-shortcut gets bounded retries before strict complete-NDEF fallback. A
+An active alias mismatch or ambiguous hosted alias fails closed. The aligned
+suffix shortcut gets bounded retries before strict complete-NDEF fallback. A
 transient authoritative Type 2 page failure
 gets bounded target re-selection followed by one bounded RF-field recovery;
 the reader never falls back to physical UID identity. After strict URL
 verification, the current physical placement may reuse its opaque key only
 until the reader first observes removal, avoiding a second NDEF exchange while
-the same Sticker is being lifted.
+the same Sticker is being lifted. Deployments may configure
+`MAGIC_BOX_NDEF_UID_CACHE` for a persistent hashed acceleration cache; entries
+are learned only after canonical verification and invalidated when their
+playback key disappears from authenticated config.
+
+Hosted Type 2 mode uses the PN532's stock receiver settings. It also issues
+`SetParameters` after SAM configuration to preserve automatic ATR response
+while disabling automatic RATS and ISO 14443-4 target behavior, neither of
+which NTAG21x Type 2 Story Stickers require. The Dock performs NTAG memory reads
+only: it does not send EMV/payment APDUs and cannot complete a contactless
+payment. An iPhone may still surface Apple Wallet merely because it detects the
+reader's RF field; preventing that completely requires physical antenna/field
+confinement rather than weakening Sticker-read reliability in software.
 
 For a factory-encoded tag batch, the supplier may still return a manufacturing
 manifest for QA and traceability:

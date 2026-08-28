@@ -46,6 +46,11 @@ _STORY_SUFFIX_PATH_RE = re.compile(
     r"/s/([A-Za-z0-9_-]{32})/([A-Z0-9]{4}-(?!0000\Z)[0-9]{4})\Z"
 )
 _STORY_SUFFIX_FAST_PATH_PAGE = 19
+_STORY_SUFFIX_ALIGNED_FIRST_PAGE = 16
+_STORY_SUFFIX_ALIGNED_SECOND_PAGE = 20
+_STORY_SUFFIX_ALIGNED_OFFSET = (
+    _STORY_SUFFIX_FAST_PATH_PAGE - _STORY_SUFFIX_ALIGNED_FIRST_PAGE
+) * _NTAG_PAGE_BYTES
 _STORY_SUFFIX_FAST_WINDOW_RE = re.compile(
     rb"[A-Za-z0-9_-]{2}/([A-Z0-9]{4}-(?!0000)[0-9]{4})\xFE\x00\x00\x00\Z"
 )
@@ -61,11 +66,15 @@ _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
 _NTAG_RF_FIELD_RECOVERY_SETTLE_SECONDS = 0.05
 _PN532_COMMAND_RF_CONFIGURATION = 0x32
+_PN532_COMMAND_IN_DATA_EXCHANGE = 0x40
+_PN532_COMMAND_SET_PARAMETERS = 0x12
 _PN532_COMMAND_READ_REGISTER = 0x06
 _PN532_COMMAND_WRITE_REGISTER = 0x08
+_PN532_MIFARE_READ = 0x30
 _PN532_RF_CONFIG_RF_FIELD = 0x01
 _PN532_RF_CONFIG_MAX_COMMUNICATION_RETRIES = 0x04
 _PN532_TYPE2_COMMUNICATION_RETRIES = 3
+_PN532_TYPE2_PROTOCOL_PARAMETERS = 0x04
 _PN532_CIU_RF_CONFIG_REGISTER = (0x63, 0x16)
 _PN532_RECEIVER_GAIN_MASK = 0x70
 _PN532_TYPE2_CLOSE_CONTACT_GAIN = 0x70
@@ -153,7 +162,11 @@ class TriggerFileNFCReader:
         return normalize_uid(uid) if uid else None
 
 
-def _open_pn532_spi(*, type2_receiver: bool = False) -> Any:
+def _open_pn532_spi(
+    *,
+    type2_receiver: bool = False,
+    type2_protocol: bool = False,
+) -> Any:
     try:
         import board
         import busio
@@ -169,12 +182,25 @@ def _open_pn532_spi(*, type2_receiver: bool = False) -> Any:
         cs_pin = digitalio.DigitalInOut(board.D8)
         pn532 = PN532_SPI(spi, cs_pin, debug=False)
         pn532.SAM_configuration()
+        if type2_protocol:
+            _configure_pn532_type2_protocol(pn532)
         if type2_receiver:
             _configure_pn532_communication_retries(pn532)
             _configure_pn532_type2_receiver_gain(pn532)
         return pn532
     except Exception as exc:  # Hardware libraries raise board-specific errors.
         raise NFCError(f"Could not initialize PN532 over SPI: {exc}") from exc
+
+
+def _configure_pn532_type2_protocol(pn532: Any) -> None:
+    """Keep automatic ATR while disabling ISO14443-4 target behavior and RATS."""
+
+    response = pn532.call_function(
+        _PN532_COMMAND_SET_PARAMETERS,
+        params=[_PN532_TYPE2_PROTOCOL_PARAMETERS],
+    )
+    if response is None:
+        raise NFCError("Could not configure PN532 Type 2 protocol parameters.")
 
 
 def _configure_pn532_communication_retries(pn532: Any) -> None:
@@ -280,7 +306,12 @@ class PN532NDEFReader:
             configured_path = os.getenv("MAGIC_BOX_CONFIG", "config/characters.json").strip()
             config_path = Path(configured_path).expanduser()
         self._alias_resolver = _PlaybackAliasResolver(config_path)
-        self._pn532 = _open_pn532_spi(type2_receiver=True)
+        self._alias_config_generation = self._alias_resolver.generation()
+        self._verified_unclaimed_cache_keys: set[str] = set()
+        self._pn532 = _open_pn532_spi(
+            type2_receiver=False,
+            type2_protocol=True,
+        )
         self._present_uid_cache_key: str | None = None
         self._present_playback_key: str | None = None
 
@@ -296,11 +327,22 @@ class PN532NDEFReader:
             return None
 
         present_uid_cache_key = _uid_cache_key(tag_present)
+        alias_config_generation = self._alias_resolver.generation()
+        if alias_config_generation != self._alias_config_generation:
+            self._verified_unclaimed_cache_keys.clear()
+            self._alias_config_generation = alias_config_generation
         if (
             present_uid_cache_key == self._present_uid_cache_key
             and self._present_playback_key is not None
         ):
             return self._present_playback_key
+
+        if present_uid_cache_key in self._verified_unclaimed_cache_keys:
+            self._remember_current_placement(
+                present_uid_cache_key,
+                _UNCLAIMED_STORY_STICKER_KEY,
+            )
+            return _UNCLAIMED_STORY_STICKER_KEY
 
         cached_key = self._uid_cache.lookup(tag_present)
         if cached_key is not None:
@@ -309,15 +351,9 @@ class PN532NDEFReader:
 
         try:
             try:
-                # The shortcut is the reliable current-format discovery path.
-                # It can select mapped audio only through authenticated hosted
-                # config. An exact but inactive suffix receives a constant
-                # discovery-only key below; it never gains playback identity.
-                fast_window = _read_ntag_window(
-                    self._pn532,
-                    _STORY_SUFFIX_FAST_PATH_PAGE,
-                    attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
-                )
+                # Two four-page-aligned reads reconstruct the exact current URL
+                # suffix without relying on the less reliable page-19 command.
+                fast_window = _read_aligned_story_suffix_window(self._pn532)
             except ValueError:
                 # A transient shortcut-window failure may still be recovered
                 # by verifying the complete exact URL.
@@ -344,6 +380,14 @@ class PN532NDEFReader:
                         present_uid_cache_key,
                         _UNCLAIMED_STORY_STICKER_KEY,
                     )
+                    if (
+                        present_uid_cache_key
+                        not in self._verified_unclaimed_cache_keys
+                        and len(self._verified_unclaimed_cache_keys)
+                        >= _UID_CACHE_MAX_ENTRIES
+                    ):
+                        self._verified_unclaimed_cache_keys.pop()
+                    self._verified_unclaimed_cache_keys.add(present_uid_cache_key)
                     return _UNCLAIMED_STORY_STICKER_KEY
 
             # A readable nonmatching window may be a legacy V1 Sticker. An
@@ -489,6 +533,7 @@ class _PlaybackAliasResolver:
         self._fingerprint: tuple[int, int, int] | None = None
         self._aliases: dict[str, str] = {}
         self._ambiguous_aliases: set[str] = set()
+        self._generation = 0
 
     def resolve(self, playback_alias: str) -> str | None:
         if _STORY_PLAYBACK_ALIAS_RE.fullmatch(playback_alias) is None:
@@ -504,6 +549,12 @@ class _PlaybackAliasResolver:
         self._reload_if_changed()
         return playback_alias in self._ambiguous_aliases
 
+    def generation(self) -> int:
+        """Return a revision that changes only when playable aliases change."""
+
+        self._reload_if_changed()
+        return self._generation
+
     def _reload_if_changed(self) -> None:
         try:
             stat = self.path.stat()
@@ -516,6 +567,8 @@ class _PlaybackAliasResolver:
             if not isinstance(document, dict):
                 raise ValueError("hosted config was not an object")
         except (OSError, TypeError, ValueError):
+            if self._aliases or self._ambiguous_aliases:
+                self._generation += 1
             self._fingerprint = None
             self._aliases = {}
             self._ambiguous_aliases = set()
@@ -546,6 +599,8 @@ class _PlaybackAliasResolver:
                 aliases[alias] = raw_key
         for alias in ambiguous:
             aliases.pop(alias, None)
+        if aliases != self._aliases or ambiguous != self._ambiguous_aliases:
+            self._generation += 1
         self._fingerprint = fingerprint
         self._aliases = aliases
         self._ambiguous_aliases = ambiguous
@@ -561,6 +616,25 @@ def _story_suffix_alias_from_fast_window(window: bytes) -> str | None:
         return match.group(1).decode("ascii", errors="strict")
     except UnicodeDecodeError:
         return None
+
+
+def _read_aligned_story_suffix_window(pn532: Any) -> bytes:
+    """Reconstruct the suffix window from two four-page-aligned reads."""
+
+    first = _read_ntag_window(
+        pn532,
+        _STORY_SUFFIX_ALIGNED_FIRST_PAGE,
+        attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
+    )
+    second = _read_ntag_window(
+        pn532,
+        _STORY_SUFFIX_ALIGNED_SECOND_PAGE,
+        attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
+    )
+    return (
+        first[_STORY_SUFFIX_ALIGNED_OFFSET:]
+        + second[:_STORY_SUFFIX_ALIGNED_OFFSET]
+    )
 
 
 def story_playback_key_from_token(token: str) -> str:
@@ -714,18 +788,49 @@ def _read_ntag_window(
     attempts: int = _NTAG_PAGE_READ_ATTEMPTS,
 ) -> bytes:
     wrong_size = False
+    failure_kinds: set[str] = set()
     if attempts < 1 or attempts > _NTAG_PAGE_READ_ATTEMPTS:
         raise ValueError("NTAG page read attempt budget was invalid")
     for attempt in range(attempts):
         try:
-            block = pn532.mifare_classic_read_block(page)
+            if type(pn532).__module__.startswith("adafruit_pn532."):
+                response = pn532.call_function(
+                    _PN532_COMMAND_IN_DATA_EXCHANGE,
+                    params=[0x01, _PN532_MIFARE_READ, page & 0xFF],
+                    response_length=_NTAG_READ_WINDOW_BYTES + 1,
+                )
+                if response is None:
+                    failure_kinds.add("response-timeout")
+                    block = None
+                elif not response:
+                    failure_kinds.add("empty-response")
+                    block = None
+                elif response[0] != 0x00:
+                    failure_kinds.add(f"pn532-status-{response[0]:02x}")
+                    block = None
+                else:
+                    block = response[1:]
+            else:
+                block = pn532.mifare_classic_read_block(page)
+        except TypeError:
+            # Adafruit's read helper indexes a missing response, so a TypeError
+            # here represents a PN532 response timeout rather than tag data.
+            failure_kinds.add("response-timeout")
+            block = None
+        except RuntimeError:
+            failure_kinds.add("transport-frame")
+            block = None
         except Exception:
+            failure_kinds.add("transport-exception")
             block = None
         if block is not None:
             value = bytes(block)
             if len(value) == _NTAG_READ_WINDOW_BYTES:
                 return value
             wrong_size = True
+            failure_kinds.add("wrong-size")
+        else:
+            failure_kinds.add("no-data")
         if attempt + 1 < attempts:
             # A failed Type 2 command can leave the PN532 without an active
             # target. First use ordinary re-selection. After those bounded
@@ -741,6 +846,11 @@ def _read_ntag_window(
             time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
     if wrong_size:
         raise ValueError("NTAG page had the wrong size")
+    LOGGER.warning(
+        "NTAG transport exhausted for page %d (%s).",
+        page,
+        "+".join(sorted(failure_kinds)) or "unclassified",
+    )
     raise ValueError("NTAG page could not be read")
 
 

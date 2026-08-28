@@ -54,6 +54,7 @@ audio/**/*.mp4
 config/control.json
 config/device_state.json
 config/guest_links.json
+config/ndef_uid_cache.json
 config/story_stickers.json
 config/volume.json
 *.zip

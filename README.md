@@ -172,7 +172,8 @@ python -m magic_box.app --nfc pn532-ndef
 
 In `pn532-ndef` mode, the tag must contain exactly one canonical Story Dock
 NDEF HTTPS URI record. Legacy URLs are parsed completely. New suffix URLs put
-the public `SDxx-xxxx` alias in a fixed page-19 read window. An active alias is
+the public `SDxx-xxxx` alias in a fixed suffix window reconstructed from two
+four-page-aligned reads. An active alias is
 accepted only when authenticated hosted config maps it to a canonical
 token-derived `sdpk1_...` key. An exact inactive alias receives only the generic
 discovery key and follows the ordinary unknown-tag path; ambiguous or
@@ -181,10 +182,12 @@ can accelerate later taps but is never returned or configured as identity. A
 strictly verified current placement is also reused only until the reader first
 observes removal, preventing lift-edge polls from restarting the NDEF exchange.
 URLs, tokens, aliases, and raw UIDs are not written to logs or hosted config. A
-failed page-19 shortcut yields to authoritative complete-NDEF verification. A
+failed aligned shortcut yields to authoritative complete-NDEF verification. A
 failed authoritative Type 2 page exchange
 receives bounded target re-selection and one bounded RF-field recovery before
-the value-free read failure is reported.
+the value-free read failure is reported. Hosted Type 2 mode keeps the PN532's
+stock receiver settings and disables automatic RATS/ISO 14443-4 target behavior;
+ordinary UID-based `pn532` maker mode is unchanged.
 
 ## Scan A Tag
 

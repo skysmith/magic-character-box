@@ -41,6 +41,15 @@ python scripts/scan_tag.py --nfc pn532
 
 If the dashboard shows a `Last seen tag`, the reader worked at least once. Use `Use this tag` in Teach Mode to avoid copying the UID manually.
 
+In hosted `pn532-ndef` mode, an iPhone held directly over the PN532 may show
+Apple Wallet even though the Dock is not a payment terminal. The Dock disables
+automatic RATS/ISO 14443-4 target behavior and sends only NTAG memory-read
+commands; it sends no EMV/payment APDUs and cannot complete a payment. Keep
+phones away from the reader during Sticker placement. If a product enclosure
+must prevent the prompt entirely, adjust antenna shielding or presentation
+geometry during hardware development rather than reducing receiver gain or
+duty-cycling the reader, both of which can make Sticker taps less reliable.
+
 ## No Audio
 
 Check:

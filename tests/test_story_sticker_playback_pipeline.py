@@ -25,7 +25,7 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
                     f"{ORIGIN}/s/{token}/SD03-0001"
                 )
             ),
-            transient_page_failures={19: 2},
+            transient_page_failures={16: 2},
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -101,7 +101,7 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             character_name="URL-selected memory",
             source="playback",
         )
-        self.assertEqual(fake_pn532.page_read_attempts, {19: 3})
+        self.assertEqual(fake_pn532.page_read_attempts, {16: 3, 20: 1})
         self.assertEqual(fake_pn532.selection_attempts, 3)
 
     def test_unclaimed_suffix_url_reaches_unknown_tone_after_complete_verification(self) -> None:
@@ -161,7 +161,7 @@ class StoryStickerPlaybackPipelineTests(unittest.TestCase):
             known=False,
             source="playback",
         )
-        self.assertEqual(fake_pn532.page_read_attempts, {19: 1})
+        self.assertEqual(fake_pn532.page_read_attempts, {16: 1, 20: 1})
 
 
 class _OneNDEFTagThenTerminateReader:
