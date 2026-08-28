@@ -26,7 +26,10 @@ The real admin service should include `--nfc pn532`. If you see `--nfc mock`, st
 
 Check:
 
-- PN532 switch/jumper is set to SPI mode.
+- PN532 switch/jumper is visibly set to the board's printed SPI combination
+  with power disconnected. On the photographed AITRIP \`HSU=0/0\`,
+  \`I2C=1/0\`, \`SPI=0/1\` variant, switch 1 is away from \`ON\` and switch 2 is
+  toward \`ON\`; \`1/1\` is not a qualified SPI setting.
 - SPI is enabled in `sudo raspi-config`.
 - PN532 `VCC` is on Pi `3.3V`, not 5V unless your board specifically requires 5V-tolerant power.
 - `SCK`, `MISO`, `MOSI`, and `SS/CS` match [wiring.md](wiring.md).

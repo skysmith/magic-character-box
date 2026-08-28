@@ -55,7 +55,12 @@ PN532 MOSI   -> GPIO10 / MOSI / pin 19
 PN532 SS/CS  -> GPIO8  / CE0  / pin 24
 ```
 
-Set the PN532 module's switches/jumpers to SPI mode. The exact switch positions depend on the board.
+Set the PN532 module's switches/jumpers to SPI mode with power disconnected.
+The exact positions depend on the board and must be read from that board's
+printed mode table. On the photographed AITRIP board whose table reads
+\`HSU=0/0\`, \`I2C=1/0\`, and \`SPI=0/1\`, SPI means switch 1 away from the side
+marked \`ON\` and switch 2 toward \`ON\`. A visible \`1/1\` setting is not SPI and
+must not be used as reader-qualification evidence.
 
 Enable SPI on the Pi:
 
