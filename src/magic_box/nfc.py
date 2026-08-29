@@ -45,6 +45,9 @@ _STORY_PATH_RE = re.compile(r"/s/([A-Za-z0-9_-]{4,256})\Z")
 _STORY_SUFFIX_PATH_RE = re.compile(
     r"/s/([A-Za-z0-9_-]{32})/([A-Z0-9]{4}-(?!0000\Z)[0-9]{4})\Z"
 )
+_STORY_SUFFIX_FRAGMENT_RE = re.compile(
+    r"([A-Za-z0-9_-]{32})/([A-Z0-9]{4}-(?!0000\Z)[0-9]{4})\Z"
+)
 _STORY_SUFFIX_FAST_PATH_PAGE = 19
 _STORY_SUFFIX_ALIGNED_FIRST_PAGE = 16
 _STORY_SUFFIX_ALIGNED_SECOND_PAGE = 20
@@ -656,7 +659,7 @@ def story_playback_key_from_url(
         raise ValueError("Story Sticker URL was invalid")
     if story_url != story_url.strip() or any(ord(character) < 0x20 for character in story_url):
         raise ValueError("Story Sticker URL was invalid")
-    if "?" in story_url or "#" in story_url:
+    if "?" in story_url:
         raise ValueError("Story Sticker URL was invalid")
 
     try:
@@ -667,7 +670,13 @@ def story_playback_key_from_url(
         raise ValueError("Story Sticker URL was invalid")
     if parsed.netloc.lower() != urlsplit(expected_origin).netloc.lower():
         raise ValueError("Story Sticker URL was invalid")
-    if parsed.query or parsed.fragment:
+    if parsed.query:
+        raise ValueError("Story Sticker URL was invalid")
+
+    suffix_fragment_match = _STORY_SUFFIX_FRAGMENT_RE.fullmatch(parsed.fragment)
+    if parsed.path == "/s" and suffix_fragment_match is not None:
+        return story_playback_key_from_token(suffix_fragment_match.group(1))
+    if parsed.fragment:
         raise ValueError("Story Sticker URL was invalid")
 
     suffix_match = _STORY_SUFFIX_PATH_RE.fullmatch(parsed.path)
@@ -689,6 +698,9 @@ def story_playback_alias_from_url(
 
     story_playback_key_from_url(story_url, expected_origin=expected_origin)
     parsed = urlsplit(story_url)
+    suffix_fragment_match = _STORY_SUFFIX_FRAGMENT_RE.fullmatch(parsed.fragment)
+    if parsed.path == "/s" and suffix_fragment_match is not None:
+        return suffix_fragment_match.group(2)
     suffix_match = _STORY_SUFFIX_PATH_RE.fullmatch(parsed.path)
     return suffix_match.group(2) if suffix_match is not None else None
 

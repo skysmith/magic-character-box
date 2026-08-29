@@ -629,6 +629,10 @@ class PN532NDEFReaderTests(unittest.TestCase):
             f"{ORIGIN}/s/{'A' * 31}/SD03-0001",
             f"{ORIGIN}/s/{'A' * 32}!/SD03-0001",
             f"{ORIGIN}/s/SD03-0001/{'A' * 32}",
+            f"{ORIGIN}/s#{'A' * 32}/SD3-0001",
+            f"{ORIGIN}/s#{'A' * 31}/SD03-0001",
+            f"{ORIGIN}/s#{'A' * 32}/SD03-0000",
+            f"{ORIGIN}/s/extra#{'A' * 32}/SD03-0001",
         )
 
         for url in invalid_urls:
@@ -657,6 +661,35 @@ class PN532NDEFReaderTests(unittest.TestCase):
 
         self.assertEqual(key, playback_key)
         self.assertGreater(len(fake.read_pages), 1)
+
+    def test_suffix_fragment_uses_complete_url_fallback_when_window_is_shifted(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        playback_key = story_playback_key_from_token(token)
+        url = f"{ORIGIN}/s#{token}/SD03-0001"
+        fake = _FakePN532(
+            uid=b"\x04\xA1",
+            memory=_type2_memory(_uri_record(url, prefix_code=0x00)),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_path = _write_hosted_config(Path(temp_dir), playback_key, "SD03-0001")
+            key = _ndef_reader(fake, config_path=config_path).read_uid()
+
+        self.assertEqual(key, playback_key)
+        self.assertGreater(len(fake.read_pages), 1)
+
+    def test_suffix_fragment_preserves_qualified_page_19_window(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        alias = "SD03-0001"
+        old_memory = _type2_memory(_uri_record(f"{ORIGIN}/s/{token}/{alias}"))
+        new_memory = _type2_memory(_uri_record(f"{ORIGIN}/s#{token}/{alias}"))
+        offset = (19 - 4) * 4
+
+        self.assertEqual(old_memory[offset : offset + 16], new_memory[offset : offset + 16])
+        self.assertEqual(
+            new_memory[offset:].ljust(16, b"\x00")[:16],
+            b"ef/SD03-0001\xfe\x00\x00\x00",
+        )
 
     def test_suffix_identity_is_manifest_key_not_alias_or_uid(self) -> None:
         uid = b"\x04\xA1\x22\x9B"
@@ -769,6 +802,16 @@ class StoryPlaybackKeyTests(unittest.TestCase):
             story_playback_alias_from_url(f"{ORIGIN}/s/{token}/SD03-0001"),
             "SD03-0001",
         )
+
+    def test_url_derivation_accepts_canonical_suffix_fragment(self) -> None:
+        token = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef"
+        url = f"{ORIGIN}/s#{token}/SD03-0001"
+
+        self.assertEqual(
+            story_playback_key_from_url(url),
+            story_playback_key_from_token(token),
+        )
+        self.assertEqual(story_playback_alias_from_url(url), "SD03-0001")
 
 
 class _FakePN532:
