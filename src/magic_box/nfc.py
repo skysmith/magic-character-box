@@ -68,6 +68,7 @@ _NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS = 3
 _NTAG_PAGE_RETRY_DELAY_SECONDS = 0.03
 _NTAG_PAGE_RESELECT_TIMEOUT_SECONDS = 0.25
 _NTAG_RF_FIELD_RECOVERY_SETTLE_SECONDS = 0.05
+_NTAG_RF_FIELD_RECOVERY_POST_ON_SETTLE_SECONDS = 0.05
 _PN532_COMMAND_RF_CONFIGURATION = 0x32
 _PN532_COMMAND_IN_DATA_EXCHANGE = 0x40
 _PN532_COMMAND_SET_PARAMETERS = 0x12
@@ -360,6 +361,8 @@ class PN532NDEFReader:
             except ValueError:
                 # A transient shortcut-window failure may still be recovered
                 # by verifying the complete exact URL.
+                if not _reselect_pn532_type2_target(self._pn532):
+                    raise ValueError("PN532 target re-selection failed")
                 fast_window = None
             if fast_window is not None:
                 playback_alias = _story_suffix_alias_from_fast_window(fast_window)
@@ -737,6 +740,7 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
         "NTAG page could not be read": "page-read",
         "NTAG page had the wrong size": "page-size",
         "TLV payload was incomplete": "tlv-payload",
+        "PN532 target re-selection failed": "reselect-failed",
         "Type 2 control TLV was invalid": "control-tlv",
         "Type 2 TLV stream was not a single NDEF message": "ndef-tlv-count",
         "NDEF message was empty": "ndef-empty",
@@ -801,9 +805,18 @@ def _read_ntag_window(
 ) -> bytes:
     wrong_size = False
     failure_kinds: set[str] = set()
+    target_selected = True
     if attempts < 1 or attempts > _NTAG_PAGE_READ_ATTEMPTS:
         raise ValueError("NTAG page read attempt budget was invalid")
     for attempt in range(attempts):
+        if not target_selected:
+            if not _reselect_pn532_type2_target(pn532):
+                failure_kinds.add("reselect-failed")
+                if attempt + 1 < attempts:
+                    time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
+                continue
+            target_selected = True
+            time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
         try:
             if type(pn532).__module__.startswith("adafruit_pn532."):
                 response = pn532.call_function(
@@ -844,18 +857,15 @@ def _read_ntag_window(
         else:
             failure_kinds.add("no-data")
         if attempt + 1 < attempts:
+            target_selected = False
             # A failed Type 2 command can leave the PN532 without an active
             # target. First use ordinary re-selection. After those bounded
             # retries are exhausted, cycle only the reader's RF field once to
-            # recover a wedged target exchange, then re-select. The returned
-            # UID is deliberately ignored and is never identity.
+            # recover a wedged target exchange, then re-select on the next
+            # attempt. The returned UID is deliberately ignored and is never
+            # identity.
             if attempt + 1 == _NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS:
                 _recover_pn532_type2_rf_field(pn532)
-            try:
-                pn532.read_passive_target(timeout=_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS)
-            except Exception:
-                pass
-            time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
     if wrong_size:
         raise ValueError("NTAG page had the wrong size")
     LOGGER.warning(
@@ -864,6 +874,18 @@ def _read_ntag_window(
         "+".join(sorted(failure_kinds)) or "unclassified",
     )
     raise ValueError("NTAG page could not be read")
+
+
+def _reselect_pn532_type2_target(pn532: Any) -> bool:
+    """Select a fresh Type 2 target before issuing another raw read."""
+
+    try:
+        selected = pn532.read_passive_target(
+            timeout=_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS
+        )
+        return bool(selected)
+    except Exception:
+        return False
 
 
 def _recover_pn532_type2_rf_field(pn532: Any) -> None:
@@ -880,13 +902,17 @@ def _recover_pn532_type2_rf_field(pn532: Any) -> None:
     try:
         time.sleep(_NTAG_RF_FIELD_RECOVERY_SETTLE_SECONDS)
     finally:
+        field_enabled = False
         try:
             pn532.call_function(
                 _PN532_COMMAND_RF_CONFIGURATION,
                 params=[_PN532_RF_CONFIG_RF_FIELD, 0x01],
             )
+            field_enabled = True
         except Exception:
             pass
+    if field_enabled:
+        time.sleep(_NTAG_RF_FIELD_RECOVERY_POST_ON_SETTLE_SECONDS)
 
 
 def _complete_tlv_prefix_end(memory: bytes | bytearray) -> int | None:

@@ -185,7 +185,9 @@ URLs, tokens, aliases, and raw UIDs are not written to logs or hosted config. A
 failed aligned shortcut yields to authoritative complete-NDEF verification. A
 failed authoritative Type 2 page exchange
 receives bounded target re-selection and one bounded RF-field recovery before
-the value-free read failure is reported. Hosted Type 2 mode keeps the PN532's
+the value-free read failure is reported; a failed shortcut also requires a
+fresh target selection before page-4 fallback, and no raw read follows a
+failed re-selection. Hosted Type 2 mode keeps the PN532's
 stock receiver settings and disables automatic RATS/ISO 14443-4 target behavior;
 ordinary UID-based `pn532` maker mode is unchanged.
 

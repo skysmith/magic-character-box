@@ -119,8 +119,9 @@ after URL or active-alias verification and is invalidated when its playback key
 is no longer configured.
 
 An active alias mismatch or ambiguous hosted alias fails closed. The aligned
-suffix shortcut gets bounded retries before strict complete-NDEF fallback. A
-transient authoritative Type 2 page failure
+suffix shortcut gets bounded retries before strict complete-NDEF fallback and
+freshly selects the target before that page-4 fallback; no raw read follows a
+failed target re-selection. A transient authoritative Type 2 page failure
 gets bounded target re-selection followed by one bounded RF-field recovery;
 the reader never falls back to physical UID identity. After strict URL
 verification, the current physical placement may reuse its opaque key only

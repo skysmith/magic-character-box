@@ -14,6 +14,8 @@ from magic_box.nfc import (
     _configure_pn532_communication_retries,
     _configure_pn532_type2_protocol,
     _configure_pn532_type2_receiver_gain,
+    _read_ntag_window,
+    _recover_pn532_type2_rf_field,
     create_reader,
     story_playback_key_from_token,
     story_playback_alias_from_url,
@@ -561,6 +563,122 @@ class PN532NDEFReaderTests(unittest.TestCase):
         self.assertEqual(fake.rf_field_calls, [(0x32, [0x01, 0x00]), (0x32, [0x01, 0x01])])
         self.assertIn(unittest.mock.call(0.05), sleep.call_args_list)
 
+    def test_raw_ntag_window_success_uses_direct_in_data_exchange(self) -> None:
+        payload = b"0123456789abcdef"
+        fake = _RawPN532(responses={16: [b"\x00" + payload]})
+
+        self.assertEqual(_read_ntag_window(fake, 16, attempts=1), payload)
+        self.assertEqual(
+            fake.exchange_calls,
+            [(0x40, [0x01, 0x30, 16], 17)],
+        )
+
+    def test_raw_ntag_window_preserves_status_and_transport_failure_categories(
+        self,
+    ) -> None:
+        failures = (
+            (b"\x0B", "pn532-status-0b", "page-read"),
+            (b"\x27", "pn532-status-27", "page-read"),
+            (None, "response-timeout", "page-read"),
+            (RuntimeError("frame"), "transport-frame", "page-read"),
+            (b"", "empty-response", "page-read"),
+            (b"\x00short", "wrong-size", "page-size"),
+        )
+
+        for response, telemetry, reason in failures:
+            with self.subTest(telemetry=telemetry):
+                fake = _RawPN532(responses={16: [response]})
+                error_text = (
+                    "NTAG page had the wrong size"
+                    if reason == "page-size"
+                    else "NTAG page could not be read"
+                )
+                log_context = (
+                    self.assertLogs("magic_box.nfc", level="WARNING")
+                    if reason != "page-size"
+                    else patch("magic_box.nfc.LOGGER.warning")
+                )
+                with log_context as logs:
+                    with self.assertRaisesRegex(ValueError, error_text):
+                        _read_ntag_window(fake, 16, attempts=1)
+                if reason != "page-size":
+                    self.assertTrue(any(telemetry in message for message in logs.output))
+
+    def test_failed_raw_reselect_suppresses_the_next_in_data_exchange(self) -> None:
+        payload = b"0123456789abcdef"
+        fake = _RawPN532(
+            responses={16: [b"\x0B", b"\x00" + payload]},
+            selection_results=[None, b"\x04\xA1"],
+        )
+
+        with patch("magic_box.nfc.time.sleep"):
+            self.assertEqual(_read_ntag_window(fake, 16, attempts=3), payload)
+
+        exchange_events = [event for event in fake.events if event[0] == "exchange"]
+        self.assertEqual(len(exchange_events), 2)
+        self.assertEqual(
+            fake.events,
+            [
+                ("exchange", 16),
+                ("select", None),
+                ("select", b"\x04\xA1"),
+                ("exchange", 16),
+            ],
+        )
+
+    def test_rf_recovery_waits_after_rf_field_is_enabled_before_reselect(self) -> None:
+        fake = _RawPN532(responses={16: [b"\x0B"] * 4})
+
+        def record_sleep(seconds: float) -> None:
+            fake.events.append(("sleep", seconds))
+
+        with patch("magic_box.nfc.time.sleep", side_effect=record_sleep):
+            _recover_pn532_type2_rf_field(fake)
+
+        self.assertEqual(
+            fake.events,
+            [
+                ("rf", (0x32, [0x01, 0x00])),
+                ("sleep", 0.05),
+                ("rf", (0x32, [0x01, 0x01])),
+                ("sleep", 0.05),
+            ],
+        )
+
+    def test_shortcut_failure_reselects_before_page4_full_ndef_fallback(self) -> None:
+        token = "fresh-selection-before-fallback"
+        memory = _type2_memory(_uri_record(f"{ORIGIN}/s/{token}"))
+        source = _FakePN532(uid=b"\x04\xA1", memory=memory)
+        responses = {
+            16: [b"\x0B", b"\x0B", b"\x0B"],
+        }
+        for page in [3, *range(4, max(source.pages) + 1, 4)]:
+            block = source.mifare_classic_read_block(page)
+            if block is not None:
+                responses[page] = responses.get(page, []) + [b"\x00" + block]
+        fake = _RawPN532.from_pages(
+            source.pages,
+            responses=responses,
+            selection_results=[b"\x04\xA1"] * 5,
+        )
+
+        with patch("magic_box.nfc.time.sleep"):
+            key = _ndef_reader(fake).read_uid()
+
+        self.assertEqual(key, story_playback_key_from_token(token))
+        self.assertEqual(fake.read_pages[:5], [16, 16, 16, 4, 3])
+        self.assertEqual(
+            [event for event in fake.events if event[0] == "select"],
+            [
+                ("select", b"\x04\xA1"),
+                ("select", b"\x04\xA1"),
+                ("select", b"\x04\xA1"),
+                ("select", b"\x04\xA1"),
+            ],
+        )
+        page4_exchange = fake.events.index(("exchange", 4))
+        self.assertEqual(fake.events[page4_exchange - 1], ("select", b"\x04\xA1"))
+
     def test_truncated_tlv_without_terminator_fails_closed(self) -> None:
         token = "truncated-token"
         message = _uri_record(f"{ORIGIN}/s/{token}")
@@ -869,6 +987,72 @@ class _FakePN532:
     ) -> bytes:
         del response_length
         self.rf_field_calls.append((command, params))
+        return b""
+
+
+class _RawPN532(_FakePN532):
+    __module__ = "adafruit_pn532.spi"
+
+    def __init__(
+        self,
+        *,
+        responses: dict[int, list[bytes | bytearray | None | BaseException]],
+        selection_results: list[bytes | None] | None = None,
+        pages: dict[int, bytes] | None = None,
+    ) -> None:
+        super().__init__(uid=b"\x04\xA1", memory=b"")
+        if pages is not None:
+            self.pages = dict(pages)
+        self.responses = {page: list(values) for page, values in responses.items()}
+        self.selection_results = list(selection_results or [])
+        self.exchange_calls: list[tuple[int, list[int], int | None]] = []
+        self.events: list[tuple[str, object]] = []
+
+    @classmethod
+    def from_pages(
+        cls,
+        pages: dict[int, bytes],
+        *,
+        responses: dict[int, list[bytes | bytearray | None | BaseException]],
+        selection_results: list[bytes | None] | None = None,
+    ) -> "_RawPN532":
+        return cls(
+            responses=responses,
+            selection_results=selection_results,
+            pages=pages,
+        )
+
+    def read_passive_target(self, *, timeout: float) -> bytes | None:
+        del timeout
+        if self.selection_results:
+            selected = self.selection_results.pop(0)
+        else:
+            selected = self.uid
+        self.selection_attempts += 1
+        self.events.append(("select", selected))
+        return selected
+
+    def call_function(
+        self,
+        command: int,
+        *,
+        params: list[int],
+        response_length: int | None = None,
+    ) -> bytes | bytearray | None:
+        if command == 0x40:
+            page = params[2]
+            self.read_pages.append(page)
+            self.exchange_calls.append((command, params, response_length))
+            self.events.append(("exchange", page))
+            values = self.responses.setdefault(page, [])
+            response = values.pop(0) if values else None
+            if isinstance(response, BaseException):
+                raise response
+            return response
+
+        self.rf_field_calls.append((command, params))
+        if command == 0x32 and params[:1] == [0x01]:
+            self.events.append(("rf", (command, params)))
         return b""
 
 
