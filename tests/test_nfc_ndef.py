@@ -626,6 +626,26 @@ class PN532NDEFReaderTests(unittest.TestCase):
             ],
         )
 
+    def test_failed_reselect_slots_still_trigger_one_rf_recovery(self) -> None:
+        fake = _RawPN532(
+            responses={16: [b"\x0B"]},
+            selection_results=[None, None, None, None],
+        )
+
+        with patch("magic_box.nfc.time.sleep"):
+            with self.assertRaisesRegex(ValueError, "NTAG page could not be read"):
+                _read_ntag_window(fake, 16)
+
+        self.assertEqual(fake.read_pages, [16])
+        self.assertEqual(
+            fake.rf_field_calls,
+            [
+                (0x32, [0x01, 0x00]),
+                (0x32, [0x01, 0x01]),
+            ],
+        )
+        self.assertEqual(fake.selection_attempts, 4)
+
     def test_rf_recovery_waits_after_rf_field_is_enabled_before_reselect(self) -> None:
         fake = _RawPN532(responses={16: [b"\x0B"] * 4})
 
@@ -662,7 +682,10 @@ class PN532NDEFReaderTests(unittest.TestCase):
             selection_results=[b"\x04\xA1"] * 5,
         )
 
-        with patch("magic_box.nfc.time.sleep"):
+        def record_sleep(seconds: float) -> None:
+            fake.events.append(("sleep", seconds))
+
+        with patch("magic_box.nfc.time.sleep", side_effect=record_sleep):
             key = _ndef_reader(fake).read_uid()
 
         self.assertEqual(key, story_playback_key_from_token(token))
@@ -677,7 +700,30 @@ class PN532NDEFReaderTests(unittest.TestCase):
             ],
         )
         page4_exchange = fake.events.index(("exchange", 4))
-        self.assertEqual(fake.events[page4_exchange - 1], ("select", b"\x04\xA1"))
+        self.assertEqual(
+            fake.events[page4_exchange - 2 : page4_exchange],
+            [("select", b"\x04\xA1"), ("sleep", 0.03)],
+        )
+
+    def test_mid_retry_uid_swap_fails_closed_without_poisoning_uid_cache(self) -> None:
+        token = "swapped-card-must-not-poison-cache"
+        uid_a = b"\x04\xA1"
+        uid_b = b"\x04\xB2"
+        fake = _RawPN532(
+            responses={16: [b"\x0B"]},
+            selection_results=[uid_a, uid_b, uid_b, uid_b, uid_b, uid_b],
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "magic_box.nfc.time.sleep"
+        ):
+            cache_path = Path(temp_dir) / "ndef-uid-cache.json"
+            with self.assertRaisesRegex(NFCError, r"\(reselect-failed\)"):
+                _ndef_reader(fake, uid_cache_path=cache_path).read_uid()
+
+            self.assertFalse(cache_path.exists())
+
+        self.assertEqual(fake.read_pages, [16])
 
     def test_truncated_tlv_without_terminator_fails_closed(self) -> None:
         token = "truncated-token"

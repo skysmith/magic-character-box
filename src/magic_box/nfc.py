@@ -357,12 +357,19 @@ class PN532NDEFReader:
             try:
                 # Two four-page-aligned reads reconstruct the exact current URL
                 # suffix without relying on the less reliable page-19 command.
-                fast_window = _read_aligned_story_suffix_window(self._pn532)
+                fast_window = _read_aligned_story_suffix_window(
+                    self._pn532,
+                    expected_uid=tag_present,
+                )
             except ValueError:
                 # A transient shortcut-window failure may still be recovered
                 # by verifying the complete exact URL.
-                if not _reselect_pn532_type2_target(self._pn532):
+                if not _reselect_pn532_type2_target(
+                    self._pn532,
+                    expected_uid=tag_present,
+                ):
                     raise ValueError("PN532 target re-selection failed")
+                time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
                 fast_window = None
             if fast_window is not None:
                 playback_alias = _story_suffix_alias_from_fast_window(fast_window)
@@ -399,7 +406,10 @@ class PN532NDEFReader:
             # A readable nonmatching window may be a legacy V1 Sticker. An
             # unreadable shortcut may also be a transient transport failure.
             # In either case, only a strict complete NDEF parse may recover.
-            type2_memory = _read_type2_tlv_memory(self._pn532)
+            type2_memory = _read_type2_tlv_memory(
+                self._pn532,
+                expected_uid=tag_present,
+            )
             ndef_message = _single_ndef_message(type2_memory)
             story_url = _single_uri_record(ndef_message)
             playback_key = story_playback_key_from_url(
@@ -624,18 +634,24 @@ def _story_suffix_alias_from_fast_window(window: bytes) -> str | None:
         return None
 
 
-def _read_aligned_story_suffix_window(pn532: Any) -> bytes:
-    """Reconstruct the suffix window from two four-page-aligned reads."""
+def _read_aligned_story_suffix_window(
+    pn532: Any,
+    *,
+    expected_uid: bytes | bytearray | None = None,
+) -> bytes:
+    """Reconstruct the suffix window while preserving the selected UID."""
 
     first = _read_ntag_window(
         pn532,
         _STORY_SUFFIX_ALIGNED_FIRST_PAGE,
         attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
+        expected_uid=expected_uid,
     )
     second = _read_ntag_window(
         pn532,
         _STORY_SUFFIX_ALIGNED_SECOND_PAGE,
         attempts=_STORY_SUFFIX_FAST_PATH_ATTEMPTS,
+        expected_uid=expected_uid,
     )
     return (
         first[_STORY_SUFFIX_ALIGNED_OFFSET:]
@@ -761,13 +777,25 @@ def _safe_ndef_rejection_reason(exc: Exception) -> str:
     }.get(str(exc), "unclassified")
 
 
-def _read_type2_tlv_memory(pn532: Any) -> bytes:
+def _read_type2_tlv_memory(
+    pn532: Any,
+    *,
+    expected_uid: bytes | bytearray | None = None,
+) -> bytes:
     # Read the first NDEF user window immediately after selection. This mirrors
     # the proven writer/readback order and avoids spending the customer's
     # short physical tap on a manufacturing-only settle delay. One Type 2 READ
     # returns four pages; retain all 16 bytes instead of discarding 12 of them.
-    first_user_window = _read_ntag_window(pn532, _NTAG_USER_START_PAGE)
-    cc = _read_ntag_window(pn532, _NTAG_CC_PAGE)[:_NTAG_PAGE_BYTES]
+    first_user_window = _read_ntag_window(
+        pn532,
+        _NTAG_USER_START_PAGE,
+        expected_uid=expected_uid,
+    )
+    cc = _read_ntag_window(
+        pn532,
+        _NTAG_CC_PAGE,
+        expected_uid=expected_uid,
+    )[:_NTAG_PAGE_BYTES]
     if (
         cc[0] != _TYPE2_MAGIC
         or cc[1] >> 4 != 1
@@ -790,7 +818,13 @@ def _read_type2_tlv_memory(pn532: Any) -> bytes:
         _NTAG_READ_WINDOW_PAGES,
     ):
         remaining = data_area_bytes - len(memory)
-        memory.extend(_read_ntag_window(pn532, page)[:remaining])
+        memory.extend(
+            _read_ntag_window(
+                pn532,
+                page,
+                expected_uid=expected_uid,
+            )[:remaining]
+        )
         terminator_end = _complete_tlv_prefix_end(memory)
         if terminator_end is not None:
             return bytes(memory[:terminator_end])
@@ -802,6 +836,7 @@ def _read_ntag_window(
     page: int,
     *,
     attempts: int = _NTAG_PAGE_READ_ATTEMPTS,
+    expected_uid: bytes | bytearray | None = None,
 ) -> bytes:
     wrong_size = False
     failure_kinds: set[str] = set()
@@ -810,8 +845,16 @@ def _read_ntag_window(
         raise ValueError("NTAG page read attempt budget was invalid")
     for attempt in range(attempts):
         if not target_selected:
-            if not _reselect_pn532_type2_target(pn532):
+            if not _reselect_pn532_type2_target(
+                pn532,
+                expected_uid=expected_uid,
+            ):
                 failure_kinds.add("reselect-failed")
+                if (
+                    attempt + 1 < attempts
+                    and attempt + 1 == _NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS
+                ):
+                    _recover_pn532_type2_rf_field(pn532)
                 if attempt + 1 < attempts:
                     time.sleep(_NTAG_PAGE_RETRY_DELAY_SECONDS)
                 continue
@@ -859,11 +902,11 @@ def _read_ntag_window(
         if attempt + 1 < attempts:
             target_selected = False
             # A failed Type 2 command can leave the PN532 without an active
-            # target. First use ordinary re-selection. After those bounded
-            # retries are exhausted, cycle only the reader's RF field once to
-            # recover a wedged target exchange, then re-select on the next
-            # attempt. The returned UID is deliberately ignored and is never
-            # identity.
+            # target. First use ordinary re-selection. After three failed
+            # attempt slots, cycle only the reader's RF field once to recover
+            # a wedged target exchange, then re-select on the next attempt.
+            # The returned UID is only a continuity check and is never
+            # playback identity.
             if attempt + 1 == _NTAG_PAGE_RF_RECOVERY_AFTER_ATTEMPTS:
                 _recover_pn532_type2_rf_field(pn532)
     if wrong_size:
@@ -876,14 +919,27 @@ def _read_ntag_window(
     raise ValueError("NTAG page could not be read")
 
 
-def _reselect_pn532_type2_target(pn532: Any) -> bool:
-    """Select a fresh Type 2 target before issuing another raw read."""
+def _reselect_pn532_type2_target(
+    pn532: Any,
+    *,
+    expected_uid: bytes | bytearray | None = None,
+) -> bool:
+    """Select a fresh Type 2 target before issuing another raw read.
+
+    When ``expected_uid`` is supplied, a different target is treated as a
+    failed re-selection so its memory cannot be associated with the original
+    tap.
+    """
 
     try:
         selected = pn532.read_passive_target(
             timeout=_NTAG_PAGE_RESELECT_TIMEOUT_SECONDS
         )
-        return bool(selected)
+        if not selected:
+            return False
+        if expected_uid is not None and bytes(selected) != bytes(expected_uid):
+            return False
+        return True
     except Exception:
         return False
 
