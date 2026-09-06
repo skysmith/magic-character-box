@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Reconnect Story Dock</title>
+    <title>Welcome to Story Dock</title>
     <link rel="icon" href="{{ url_for('static', filename='story-dock-app-icon-192.png') }}" type="image/png">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='story-dock-app-icon-192.png') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='admin.css') }}">
@@ -22,16 +22,16 @@
           </span>
         </header>
 
-        <div class="reconnect-copy">
-          <p class="label">Wi-Fi recovery</p>
-          <h1 id="reconnect-title">Reconnect Story Dock.</h1>
+        <div class="reconnect-copy" data-reconnect-controls>
+          <p class="label">Let’s get started</p>
+          <h1 id="reconnect-title">Welcome to Story Dock.</h1>
           <p class="reconnect-lede">
-            Choose this location's Wi-Fi. Your phone will disconnect from Story Dock Setup when it succeeds.
-            Your memories stay saved.
+            Let’s connect your Wi-Fi so your memories can find their way here.
+            Choose your home network below. Your Wi-Fi password stays on Story Dock.
           </p>
         </div>
 
-        <div class="reconnect-status-strip" aria-label="Current Wi-Fi status">
+        <div class="reconnect-status-strip" aria-label="Setup connection" hidden>
           <div>
             <p class="label">Current connection</p>
             <p class="status-value" data-wifi-ssid>{{ wifi_status.ssid or "setup mode" }}</p>
@@ -44,7 +44,7 @@
 
         <div class="reconnect-step" data-reconnect-controls>
           <span aria-hidden="true">1</span>
-          <strong>Choose this location's Wi-Fi</strong>
+          <strong>Choose your home Wi-Fi</strong>
         </div>
 
         <div class="reconnect-actions" data-reconnect-controls>
@@ -55,7 +55,7 @@
           Story Dock uses 2.4 GHz Wi-Fi.
         </p>
 
-        <h2 class="visually-hidden">Available Wi-Fi networks</h2>
+        <h2 class="visually-hidden" data-reconnect-controls>Available Wi-Fi networks</h2>
         <div class="wifi-network-list reconnect-network-list" data-wifi-networks role="list">
           {% for network in wifi_status.networks %}
             <article class="wifi-network" data-wifi-network-ssid="{{ network.ssid }}" role="listitem">
@@ -76,7 +76,7 @@
         <form class="reconnect-form" data-wifi-connect data-reconnect-controls>
           <div class="reconnect-step">
             <span aria-hidden="true">2</span>
-            <strong>Enter this Wi-Fi password</strong>
+            <strong>Enter your home Wi-Fi password</strong>
           </div>
           <label>
             <span class="field-label">Wi-Fi network</span>
@@ -104,21 +104,27 @@
             </div>
           </div>
           <button class="button reconnect-submit" type="submit" {% if not wifi_status.available %}disabled{% endif %} data-wifi-connect-button>
-            Reconnect Story Dock
+            Connect Wi-Fi
           </button>
           <p class="muted form-action-status" id="wifi-connect-status" data-wifi-connect-status role="status" aria-live="polite"></p>
         </form>
 
         <div class="reconnect-success" data-reconnect-success hidden>
-          <strong data-reconnect-heading>Story Dock is connecting.</strong>
+          <h2 data-reconnect-heading tabindex="-1">Next, return to your home Wi-Fi.</h2>
           <span>
-            Your phone may briefly disconnect while Story Dock joins
-            <strong data-reconnect-target>your home Wi-Fi</strong>.
+            Story Dock switches networks to try joining <strong data-reconnect-target>your home Wi-Fi</strong>.
+            This setup page may close during that switch. That’s expected.
           </span>
+          <ol class="reconnect-handoff-steps">
+            <li>Open your phone’s Wi-Fi settings and join your home network, or use cellular internet.</li>
+            <li>Open your Story Dock setup email and tap its private setup link to continue.</li>
+            <li>Your setup page will confirm when Story Dock is online. You can record while it finishes connecting.</li>
+          </ol>
+          <p class="muted">If StoryDock-Player returns, join it again and check your home Wi-Fi password. Your Library and memories stay saved.</p>
           <div class="reconnect-owner-actions">
             <a class="button reconnect-owner-button" href="{{ owner_url }}" data-reconnect-owner>Open My Story Dock</a>
             <p class="muted reconnect-owner-status" data-reconnect-owner-status role="status" aria-live="polite">
-              We’ll open My Story Dock automatically when your phone is back online.
+              Already use this Dock? Open My Story Dock to check its connection.
             </p>
           </div>
         </div>
@@ -128,11 +134,11 @@
           <summary>Change the Story Dock Setup password</summary>
           <form class="reconnect-form" data-recovery-password-form>
             <p class="muted">
-              This is the password for joining <strong>Story Dock Setup</strong> during recovery.
+              This is the password for joining <strong>StoryDock-Player</strong> during recovery.
               It is separate from your home Wi-Fi password.
             </p>
             <p class="password-guidance" id="recovery-password-guidance">
-              Changing it overrides the password on your setup card for this dock.
+              Changing it replaces the default setup password for this dock.
               Save the new password in your password manager; Story Dock support cannot retrieve it.
               Use 8–63 characters.
             </p>

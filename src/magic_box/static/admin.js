@@ -544,8 +544,6 @@ if (wifiPanel) {
   const reconnectSuccess = wifiPanel.querySelector("[data-reconnect-success]");
   const reconnectHeading = wifiPanel.querySelector("[data-reconnect-heading]");
   const reconnectTargets = wifiPanel.querySelectorAll("[data-reconnect-target]");
-  const reconnectOwnerLink = wifiPanel.querySelector("[data-reconnect-owner]");
-  const reconnectOwnerStatus = wifiPanel.querySelector("[data-reconnect-owner-status]");
   const adapterValue = wifiPanel.querySelector("[data-wifi-adapter]");
   const messageValue = wifiPanel.querySelector("[data-wifi-message]");
   const ssidValue = wifiPanel.querySelector("[data-wifi-ssid]");
@@ -554,7 +552,7 @@ if (wifiPanel) {
   const networkList = wifiPanel.querySelector("[data-wifi-networks]");
   const optionList = wifiPanel.querySelector("[data-wifi-options]");
   let wifiAvailable = false;
-  let ownerReturnStarted = false;
+  let wifiHandoffActive = false;
 
   refreshButton?.addEventListener("click", () => {
     refreshWifiStatus("Refreshing Wi-Fi...");
@@ -576,6 +574,15 @@ if (wifiPanel) {
     reconnectTargets.forEach((target) => {
       target.textContent = ssid || "your home Wi-Fi";
     });
+    // Render the handoff before the radio switches, while this page is still reachable.
+    if (reconnectSuccess) {
+      wifiHandoffActive = true;
+      reconnectSuccess.hidden = false;
+      reconnectControls.forEach((control) => { control.hidden = true; });
+      if (networkList) networkList.hidden = true;
+      if (statusLine) statusLine.hidden = true;
+      reconnectHeading?.focus();
+    }
     const payload = await runWifiRequest("/api/wifi/connect", {
       label: `Connecting to ${ssid || "Wi-Fi"}...`,
       busyButton: connectButton,
@@ -591,15 +598,23 @@ if (wifiPanel) {
       },
     });
     if (payload?.ok === false) {
+      wifiHandoffActive = false;
+      if (reconnectSuccess) {
+        reconnectSuccess.hidden = true;
+        reconnectControls.forEach((control) => { control.hidden = false; });
+        if (networkList) networkList.hidden = false;
+        if (statusLine) statusLine.hidden = false;
+        passwordInput?.focus();
+      }
       [ssidInput, passwordInput].forEach((input) => input?.setAttribute("aria-invalid", "true"));
     }
     if ((payload?.ok || payload === null) && reconnectSuccess) {
       if (reconnectHeading) {
-        reconnectHeading.textContent = `Story Dock is connecting to ${ssid}.`;
+        reconnectHeading.textContent = "Next, return to your home Wi-Fi.";
       }
       if (payload === null && connectStatus) {
         connectStatus.textContent =
-          `The connection request was sent. If your phone disconnected, rejoin ${ssid}; My Story Dock will open when you are back online.`;
+          "Next, join your home Wi-Fi or use cellular internet, then open the private link in your Story Dock setup email.";
       }
       reconnectSuccess.hidden = false;
       if (statusLine) {
@@ -614,39 +629,9 @@ if (wifiPanel) {
       if (passwordInput) {
         passwordInput.value = "";
       }
-      beginOwnerReturn();
+      reconnectHeading?.focus();
     }
   });
-
-  function beginOwnerReturn() {
-    const ownerUrl = reconnectOwnerLink?.href || "";
-    if (!ownerUrl || ownerReturnStarted) {
-      return;
-    }
-    ownerReturnStarted = true;
-    const deadline = Date.now() + 90000;
-
-    const openWhenOnline = async () => {
-      try {
-        await fetch(ownerUrl, { cache: "no-store", mode: "no-cors" });
-        if (reconnectOwnerStatus) {
-          reconnectOwnerStatus.textContent = "Opening My Story Dock…";
-        }
-        window.location.assign(ownerUrl);
-      } catch (_error) {
-        if (Date.now() < deadline) {
-          window.setTimeout(openWhenOnline, 2500);
-          return;
-        }
-        if (reconnectOwnerStatus) {
-          reconnectOwnerStatus.textContent =
-            "When your phone is back online, tap Open My Story Dock.";
-        }
-      }
-    };
-
-    window.setTimeout(openWhenOnline, 4000);
-  }
 
   recoveryPasswordForm?.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -774,7 +759,7 @@ if (wifiPanel) {
     } catch (error) {
       if (requestStatus) {
         requestStatus.textContent = options.disconnectExpected
-          ? "This page lost contact with Story Dock while it was switching networks."
+          ? "Next, return your phone to home Wi-Fi or cellular internet, then continue from your Story Dock setup email."
           : "Could not reach Story Dock. Please try again.";
       }
       return null;
@@ -821,7 +806,7 @@ if (wifiPanel) {
     if (!networkList) {
       return;
     }
-    networkList.hidden = false;
+    networkList.hidden = wifiHandoffActive;
     if (!networks.length) {
       networkList.innerHTML = '<p class="empty-state">No networks listed yet. Tap Find Wi-Fi.</p>';
       return;

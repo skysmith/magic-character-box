@@ -219,10 +219,10 @@ main {
 }
 
 .reconnect-success {
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: #fffdf9;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
-  color: var(--state-positive);
+  color: var(--text-primary);
   display: grid;
   gap: 3px;
   padding: 12px;
@@ -243,6 +243,8 @@ main {
 }
 
 .reconnect-owner-button {
+  white-space: normal;
+  min-width: 0;
   justify-content: center;
   text-align: center;
 }
@@ -1272,10 +1274,10 @@ summary {
 }
 
 .story-saved-panel {
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: #fffdf9;
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius);
-  color: var(--state-positive);
+  color: var(--text-primary);
   display: grid;
   gap: 2px;
   padding: 12px;
@@ -1486,3 +1488,9 @@ summary {
     display: grid;
   }
 }
+
+/* A calm next step stays readable when the setup network goes away. */
+.reconnect-handoff-steps { padding-left: 1.4rem; margin: 1rem 0; }
+.reconnect-handoff-steps li { margin-bottom: .8rem; line-height: 1.5; }
+.reconnect-success h2 { margin: 0 0 .8rem; font-size: 1.6rem; line-height: 1.2; }
+.reconnect-success [data-reconnect-heading]:focus { outline: none; }
