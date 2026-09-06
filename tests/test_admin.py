@@ -101,9 +101,9 @@ class AdminTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["Cache-Control"], "no-store")
             self.assertEqual(response.headers["Referrer-Policy"], "no-referrer")
-            self.assertIn(b"Reconnect Story Dock.", response.data)
+            self.assertIn(b"Welcome to Story Dock.", response.data)
             self.assertIn(b"Find Wi-Fi", response.data)
-            self.assertIn(b"Reconnect Story Dock", response.data)
+            self.assertIn(b"Connect Wi-Fi", response.data)
             self.assertIn(b"story-dock-logo.svg", response.data)
             self.assertIn(b"story-dock-app-icon-192.png", response.data)
             self.assertIn(b"Setup mode", response.data)
@@ -111,7 +111,7 @@ class AdminTests(unittest.TestCase):
             self.assertNotIn(b"Support tools", response.data)
             self.assertNotIn(b">Refresh</button>", response.data)
             self.assertIn(b"Show home Wi-Fi password", response.data)
-            self.assertIn(b"Your memories stay saved.", response.data)
+            self.assertIn(b"Your Library and memories stay saved.", response.data)
             self.assertIn(b"Open My Story Dock", response.data)
             self.assertIn(b"data-reconnect-owner", response.data)
             self.assertIn(b"data-reconnect-owner-status", response.data)
@@ -123,17 +123,15 @@ class AdminTests(unittest.TestCase):
             self.assertNotIn(b"Teach character", response.data)
             self.assertNotIn(b"Bluetooth experiments", response.data)
 
-    def test_reconnect_script_waits_for_internet_before_opening_owner_portal(self) -> None:
-        script = (
-            Path(__file__).parents[1] / "src" / "magic_box" / "static" / "admin.js"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("beginOwnerReturn();", script)
-        self.assertIn("Story Dock is connecting to ${ssid}.", script)
-        self.assertNotIn("may be joining", script)
-        self.assertIn('mode: "no-cors"', script)
-        self.assertIn("window.location.assign(ownerUrl);", script)
-        self.assertIn("When your phone is back online, tap Open My Story Dock.", script)
+    def test_reconnect_handoff_is_visible_before_network_switch_without_auto_navigation(self) -> None:
+        script = (Path(__file__).parents[1] / "src/magic_box/static/admin.js").read_text()
+        submit = script[script.index('connectForm?.addEventListener("submit"'):]
+        self.assertLess(submit.index("reconnectSuccess.hidden = false"), submit.index('runWifiRequest("/api/wifi/connect"'))
+        self.assertIn("Next, return to your home Wi-Fi.", script)
+        self.assertNotIn("beginOwnerReturn", script)
+        self.assertNotIn("window.location.assign(ownerUrl)", script)
+        self.assertIn("reconnectSuccess.hidden = true", submit)
+        self.assertIn('control.hidden = false', submit)
 
     def test_reconnect_page_is_not_exposed_on_the_normal_admin_host(self) -> None:
         with _temp_project() as root:
@@ -155,7 +153,7 @@ class AdminTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertIn(b"Change the Story Dock Setup password", response.data)
             self.assertIn(b"It is separate from your home Wi-Fi password.", response.data)
-            self.assertIn(b"overrides the password on your setup card for this dock", response.data)
+            self.assertIn(b"replaces the default setup password for this dock", response.data)
             self.assertIn(b"Save the new password in your password manager", response.data)
             self.assertIn(b"Show new Setup Wi-Fi password", response.data)
             self.assertIn(b"data-recovery-csrf=", response.data)
