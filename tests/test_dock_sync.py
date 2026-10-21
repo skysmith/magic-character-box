@@ -1,12 +1,43 @@
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import MagicMock, patch
+import ssl
+import urllib.error
+import urllib.request
 
-from magic_box.dock_sync import HostedDockSync
+from magic_box.dock_sync import DockSyncError, HostedDockSync, _NoRedirect, _request
 
 
 class HostedDockSyncTests(unittest.TestCase):
+    def test_transport_uses_maintained_trust_despite_stale_environment(self) -> None:
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.return_value = b"audio"
+        with patch.dict(os.environ, {"SSL_CERT_FILE": "/nonexistent/stale-ca.pem"}):
+            with patch("magic_box.dock_sync.urllib.request.build_opener", return_value=opener) as build:
+                self.assertEqual(_request("https://tap.test/manifest", "synthetic-token"), b"audio")
+        handlers = build.call_args.args
+        context = next(h._context for h in handlers if isinstance(h, urllib.request.HTTPSHandler))
+        self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(context.check_hostname)
+        names = {value for cert in context.get_ca_certs() for rdn in cert["subject"] for key, value in rdn if key == "commonName"}
+        self.assertFalse(names & {"AAA Certificate Services", "emSign ECC Root CA - G3", "emSign Root TLS CA - G3"})
+        self.assertTrue(any(isinstance(h, _NoRedirect) for h in handlers))
+        self.assertEqual(opener.open.call_args.kwargs, {"timeout": 60})
+
+    def test_transport_refuses_plain_http_before_sending_credentials(self) -> None:
+        with patch("magic_box.dock_sync.urllib.request.build_opener") as build:
+            with self.assertRaises(DockSyncError):
+                _request("http://tap.test/manifest", "synthetic-token")
+            build.assert_not_called()
+
+    def test_transport_refuses_redirects(self) -> None:
+        request = urllib.request.Request("https://tap.test/manifest")
+        with self.assertRaises(urllib.error.HTTPError):
+            _NoRedirect().redirect_request(request, None, 302, "Found", {}, "https://other.test/")
+
     def test_sync_downloads_audio_and_writes_character_mapping(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

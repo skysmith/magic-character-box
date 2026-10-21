@@ -4,12 +4,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 sudo apt update
-sudo apt install -y python3 python3-pip python3-venv mpg123 alsa-utils ffmpeg git bluez
+sudo apt install -y ca-certificates python3 python3-pip python3-venv mpg123 alsa-utils ffmpeg git bluez
+sudo update-ca-certificates
+python3 - <<'PY_CA_CHECK'
+import ssl
+
+names = {
+    value
+    for cert in ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt").get_ca_certs()
+    for rdn in cert["subject"]
+    for key, value in rdn
+    if key == "commonName"
+}
+if names & {"AAA Certificate Services", "emSign ECC Root CA - G3", "emSign Root TLS CA - G3"}:
+    raise SystemExit("Update Raspberry Pi OS certificate trust before installing Python packages.")
+PY_CA_CHECK
 
 python3 -m venv .venv
 . .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+PIP_CERT=/etc/ssl/certs/ca-certificates.crt pip install --upgrade 'pip>=26.2.2'
+PIP_CERT=/etc/ssl/certs/ca-certificates.crt pip install -r requirements.txt
 
 ./scripts/generate_system_sounds.sh
 
