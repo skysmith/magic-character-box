@@ -11,7 +11,7 @@ import ssl
 
 names = {
     value
-    for cert in ssl.create_default_context().get_ca_certs()
+    for cert in ssl.create_default_context(cafile="/etc/ssl/certs/ca-certificates.crt").get_ca_certs()
     for rdn in cert["subject"]
     for key, value in rdn
     if key == "commonName"
