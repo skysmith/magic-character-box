@@ -20,6 +20,7 @@ classifiers = [
   "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
 dependencies = [
+  "certifi>=2026.10.19",
   "Flask>=3.0,<4",
   "segno>=1.6,<2",
 ]

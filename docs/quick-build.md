@@ -112,3 +112,16 @@ http://<pi-hostname-or-ip>:8080
 - Confirm the reader works through the lid.
 - Confirm the Pi and wiring are not exposed.
 - Keep the dashboard on your trusted home network only.
+
+## HTTPS trust updates
+
+Hosted sync requires HTTPS, refuses redirects and uses the maintained `certifi`
+bundle with certificate and hostname verification enabled. Keep `certifi`
+2026.10.19 or newer and pip 26.2.2 or newer installed in the Pi environment.
+The installer refreshes OS certificate trust and refuses package downloads if
+the affected eMudhra/AAA roots remain trusted. Use a supported Raspberry Pi OS
+release whose certificate package receives security updates.
+
+A source checkout or server update does not update an existing Pi. Back up its
+configuration and audio, update its OS trust and Python environment, install
+the source, and qualify HTTPS plus playback before returning it to use.

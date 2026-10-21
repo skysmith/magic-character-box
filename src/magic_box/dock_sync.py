@@ -8,9 +8,13 @@ from datetime import datetime
 import json
 from pathlib import Path
 import re
+import ssl
+import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Callable
+
+import certifi
 
 from .config import (
     folder_for_config,
@@ -163,9 +167,20 @@ def _fetch_bytes(url: str, bearer_token: str) -> bytes:
     return _request(url, bearer_token)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, "Redirect refused", headers, fp)
+
+
 def _request(url: str, bearer_token: str) -> bytes:
+    if urllib.parse.urlsplit(url).scheme.lower() != "https":
+        raise DockSyncError("Hosted sync requires HTTPS.")
+    context = ssl.create_default_context(cafile=certifi.where())
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=context), _NoRedirect()
+    )
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {bearer_token}"})
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with opener.open(request, timeout=60) as response:
         return response.read()
 
 
